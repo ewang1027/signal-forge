@@ -1,0 +1,30 @@
+[project]
+name = "signal-forge"
+version = "0.1.0"
+description = "Grounded project-idea generator and FSRS interview prep, delivered by email"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "fsrs>=5.0",
+    "sqlite-vec>=0.1.6",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Only needed for the theme-clustering stage. Kept separate so the daily run
+# (harvest + prep + deliver) stays fast and does not pull torch.
+embed = [
+    "sentence-transformers>=3.0",
+    "scikit-learn>=1.5",
+    "numpy>=1.26",
+]
+
+[tool.ruff]
+line-length = 100
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipeline"]

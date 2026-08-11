@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Blocks AI attribution in the commit message itself.
+#
+# pre-commit cannot do this -- it sees staged content, not the message. The two
+# hooks cover different surfaces and both are needed.
+
+set -uo pipefail
+
+msg_file="$1"
+
+if grep -qiE '(co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖[[:space:]]*generated|assisted by (claude|ai)|anthropic\.com)' "$msg_file"; then
+  echo "BLOCKED: AI attribution in commit message." >&2
+  grep -inE '(co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖[[:space:]]*generated|assisted by (claude|ai)|anthropic\.com)' "$msg_file" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "commit aborted." >&2
+  exit 1
+fi
+
+exit 0

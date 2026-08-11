@@ -1,0 +1,32 @@
+# Personal state never belongs in this repo. It lives in the private
+# signal-forge-state repo, checked out at runtime. This is defense in depth --
+# the real guarantee is that these files are never in this working tree at all.
+state/
+*.db
+*.db-journal
+*.db-wal
+decks/
+TASTE.md
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# models cached by sentence-transformers
+.cache/
+models/
+
+# macos
+.DS_Store

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Guards this public repo against ever committing personal data or secrets.
+#
+# The pipeline commits unattended every day, so nobody reviews those commits.
+# A gitignore is a rule the automation can violate through a path bug or a
+# rename; this hook is the thing that actually stops it.
+
+set -uo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+# 1. nothing under state/, no databases, no decks, no taste file
+blocked=$(echo "$staged" | grep -E '(^state/|\.db$|\.db-wal$|\.db-journal$|^decks/|(^|/)TASTE\.md$|(^|/)ideas/)' || true)
+if [ -n "$blocked" ]; then
+  echo "BLOCKED: personal state must never be committed to the public repo." >&2
+  echo "$blocked" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "This data belongs in the private signal-forge-state repo." >&2
+  fail=1
+fi
+
+# 2. no AI attribution anywhere in the staged content.
+#    The hooks themselves are excluded -- they contain these patterns by
+#    definition, and scanning them just makes the guard block its own source.
+scan_paths=$(echo "$staged" | grep -v '^\.githooks/' || true)
+if [ -n "$scan_paths" ]; then
+  attribution=$(git diff --cached -U0 -- $scan_paths | grep -iE '^\+.*(co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖[[:space:]]*generated)' || true)
+  if [ -n "$attribution" ]; then
+    echo "BLOCKED: AI attribution found in staged changes." >&2
+    echo "$attribution" | sed 's/^/  /' >&2
+    fail=1
+  fi
+fi
+
+# 3. secret scan
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --no-banner -v 2>&1 | tail -20; then
+    echo "BLOCKED: gitleaks found a secret in staged changes." >&2
+    fail=1
+  fi
+else
+  # gitleaks absent -- fall back to a coarse pattern check rather than nothing
+  leaked=$(git diff --cached -U0 | grep -iE '^\+.*(sk-ant-[a-z0-9-]{20,}|re_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' || true)
+  if [ -n "$leaked" ]; then
+    echo "BLOCKED: looks like a credential is staged." >&2
+    fail=1
+  fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "commit aborted." >&2
+  exit 1
+fi
+
+exit 0
