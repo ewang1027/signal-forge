@@ -150,6 +150,41 @@ similarity** (fuzzy, backstop for two themes converging on the same project). Th
 layer genuinely can miss — a hand-written paraphrase of a known duplicate scored 0.698,
 below threshold. Worth knowing rather than pretending otherwise.
 
+## Phase 3 review — fixed
+
+A review found three ways the gates were failing open. All were invisible without
+looking at real output.
+
+- **Prior art was searching the wrong topic.** `queries_for` never received the
+  domain, so `DOMAINS` insertion order made `distributed` terms anchor every query:
+  the SQLite crash-explorer was searched as `sharded sharding` and returned connection
+  poolers. This is *worse* than the empty results it replaced — the gate reads five
+  plausible repos and concludes the field is clear. Also dropped `sort=stars` (returns
+  the biggest repo matching a term rather than the closest — a Springboot tutorial got
+  cited as prior art) and lowered the floor to 5 stars, since the real competitor to a
+  niche tool is itself niche. Now finds `criticalstack/e2d` (31★, gossip-based etcd
+  manager) for the restart-budget idea.
+- **The judged gate rejected only the literal string `"kill"`.** `{}`, a null verdict,
+  a truncated response, and the word `"reject"` all shipped. A gate whose default on
+  malformed output is *pass* is not a gate. Allow-list now.
+- **`idea_signal` recorded all 14 supplied rows, not the cited ones.** `gather_evidence`
+  pads a theme to 14 rows with unrelated material, so one idea marked 14 signals spent
+  on the strength of a 3-member theme — measured at **100% of themes burned in
+  `distributed` and `networking` after a single idea**. And the `domain_evidence`
+  fallback had no exclusion at all, so once a domain burned out it served the identical
+  14 rows forever. Now records cited evidence only (3 per idea, verified) and the
+  fallback excludes used rows.
+
+Also fixed: prompts were shipping `{{ }}` to the model because the code uses
+`replace()` not `format()`; GitHub repo descriptions are attacker-controlled and went
+into the gate prompt unsanitised (a newline forges a bullet); a failed search was
+indistinguishable from a clean one; one candidate's exception killed the other two; the
+idea JSON was written *before* commit, so a rollback orphaned it into the dedup ledger
+permanently; and the pre-commit hook blocked its own `.env.example`, which trains the
+`--no-verify` habit that disarms every check.
+
+46 tests.
+
 ## Known gaps
 
 - Remaining harvest noise is **argumentative, not off-topic** — k8s-vs-docker flamewars
@@ -209,7 +244,15 @@ below threshold. Worth knowing rather than pretending otherwise.
    inside `<evidence>` tags; any commenter can write `</evidence>` and then instructions.
    Low stakes now, real in Phase 3 (prior-art search may use tools) and Phase 5 (inbound
    email). Strip the tags in `clean_html`.
-8. **Smaller:** GitHub timestamps are parsed naive and read as local time (`.replace(tzinfo=utc)`);
+8. **`themes.build()` resets feedback weights.** It inserts without `weight`, so every
+   rebuild restores `DEFAULT 1.0` and `ORDER BY (evidence * weight)` is always just
+   `evidence`. Latent until Phase 5 writes weights, but it will silently erase them.
+9. **Prompt injection is mitigated, not solved.** Delimiter stripping handles the
+   obvious case; unicode lookalikes (`‹evidence›`, fullwidth `＜`) still pass, and
+   nothing defends against instructions that need no tags at all. Two untrusted
+   channels now reach prompts — harvested comments and GitHub repo descriptions — and
+   the gate is the component an attacker would most want to influence.
+10. **Smaller:** GitHub timestamps are parsed naive and read as local time (`.replace(tzinfo=utc)`);
    a bad `GITHUB_TOKEN` 403 is treated as a rate limit and burns 36 minutes sleeping;
    the prompt goes through `argv` (131 KB cap, and evidence text is visible in `ps`) and
    should use stdin; domain ties break by dict order so `distributed` wins every tie
