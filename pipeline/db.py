@@ -47,6 +47,26 @@ CREATE TABLE IF NOT EXISTS idea (
     verdict_utc INTEGER
 );
 
+-- Clusters of corroborating complaints. Rebuilt wholesale each run; cheap
+-- enough at this corpus size and avoids incremental-clustering drift.
+CREATE TABLE IF NOT EXISTS theme (
+    id        INTEGER PRIMARY KEY,
+    label     TEXT,
+    size      INTEGER NOT NULL,
+    evidence  REAL    NOT NULL,   -- recency-weighted independent voices
+    domain    TEXT,
+    built_utc INTEGER NOT NULL,
+    weight    REAL    DEFAULT 1.0 -- adjusted by feedback; multiplies evidence
+);
+
+CREATE TABLE IF NOT EXISTS theme_member (
+    theme_id  INTEGER NOT NULL,
+    signal_id INTEGER NOT NULL,
+    PRIMARY KEY (theme_id, signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_theme_evidence ON theme(evidence DESC);
+
 -- Rotation cursor, last-run timestamps, misc counters.
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,

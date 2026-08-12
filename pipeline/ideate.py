@@ -35,15 +35,45 @@ def advance_domain(conn: sqlite3.Connection) -> None:
     set_kv(conn, "rotation_cursor", str(cursor + 1))
 
 
-def gather_evidence(conn: sqlite3.Connection, domain: str, limit: int = EVIDENCE_PER_IDEA) -> list[sqlite3.Row]:
-    """Strongest complaints in this domain.
+def top_theme(conn: sqlite3.Connection, domain: str) -> sqlite3.Row | None:
+    """Highest evidence-density theme in this domain that hasn't been used yet.
 
-    Ranked by pain and domain density, NOT by engagement. Popular threads are
-    announcements; we want the comment where somebody describes hitting a wall.
+    `evidence * weight` is the ranking signal -- corroborated independent voices,
+    adjusted by feedback. Explicitly NOT an LLM novelty score, which has been
+    shown to anti-correlate with what turns out to matter.
     """
     return conn.execute(
         """
-        SELECT url, title, text, pain, domain_hits, created_utc
+        SELECT t.* FROM theme t
+        WHERE t.domain = ?
+          AND t.id NOT IN (SELECT theme_id FROM idea WHERE theme_id IS NOT NULL)
+        ORDER BY (t.evidence * t.weight) DESC
+        LIMIT 1
+        """,
+        (domain,),
+    ).fetchone()
+
+
+def theme_evidence(conn: sqlite3.Connection, theme_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT s.url, s.title, s.text, s.pain, s.domain_hits, s.created_utc, s.source
+        FROM signal s
+        JOIN theme_member m ON m.signal_id = s.id
+        WHERE m.theme_id = ?
+        ORDER BY (s.pain * 2 + s.domain_hits) DESC
+        """,
+        (theme_id,),
+    ).fetchall()
+
+
+def domain_evidence(conn: sqlite3.Connection, domain: str,
+                    limit: int = EVIDENCE_PER_IDEA) -> list[sqlite3.Row]:
+    """Fallback when a domain has no clustered theme yet: strongest individual
+    complaints. Weaker grounding -- uncorroborated -- but better than nothing."""
+    return conn.execute(
+        """
+        SELECT url, title, text, pain, domain_hits, created_utc, source
         FROM signal
         WHERE domain = ?
         ORDER BY (pain * 2 + domain_hits) DESC, created_utc DESC
@@ -51,6 +81,25 @@ def gather_evidence(conn: sqlite3.Connection, domain: str, limit: int = EVIDENCE
         """,
         (domain, limit),
     ).fetchall()
+
+
+def gather_evidence(conn: sqlite3.Connection, domain: str) -> tuple[list[sqlite3.Row], int | None, str]:
+    """Returns (evidence rows, theme_id or None, provenance description)."""
+    theme = top_theme(conn, domain)
+    if theme is not None:
+        rows = theme_evidence(conn, theme["id"])
+        if len(rows) >= 2:
+            # top up with domain evidence so a 2-item theme still gets context
+            if len(rows) < EVIDENCE_PER_IDEA:
+                seen = {r["url"] for r in rows}
+                extra = [r for r in domain_evidence(conn, domain, EVIDENCE_PER_IDEA)
+                         if r["url"] not in seen]
+                rows = list(rows) + extra[: EVIDENCE_PER_IDEA - len(rows)]
+            return rows, theme["id"], (
+                f"theme #{theme['id']} (evidence {theme['evidence']:.2f}, "
+                f"n={theme['size']}): {theme['label']}"
+            )
+    return domain_evidence(conn, domain), None, "no clustered theme; using domain-wide evidence"
 
 
 def format_evidence(rows: list[sqlite3.Row]) -> str:
@@ -75,17 +124,17 @@ def generate(domain: str, rows: list[sqlite3.Row]) -> dict:
     return complete_json(prompt)
 
 
-def save(conn: sqlite3.Connection, idea: dict, domain: str) -> str:
+def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_id: int | None) -> str:
     ensure_state_dirs()
     slug = slugify(idea.get("title", ""))
     now = int(time.time())
 
     conn.execute(
         """
-        INSERT OR IGNORE INTO idea (slug, title, body, domain, sent_utc)
-        VALUES (?, ?, ?, ?, NULL)
+        INSERT OR IGNORE INTO idea (slug, title, body, domain, theme_id, sent_utc)
+        VALUES (?, ?, ?, ?, ?, NULL)
         """,
-        (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain),
+        (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain, theme_id),
     )
     (IDEAS_DIR / f"{now}-{slug}.json").write_text(json.dumps(idea, indent=2))
     return slug
@@ -94,7 +143,7 @@ def save(conn: sqlite3.Connection, idea: dict, domain: str) -> str:
 def main() -> int:
     with connect() as conn:
         domain = peek_domain(conn)
-        rows = gather_evidence(conn, domain)
+        rows, theme_id, provenance = gather_evidence(conn, domain)
 
         if len(rows) < 4:
             # Rotating onto a starved slice is normal early on. Skipping beats
@@ -104,9 +153,10 @@ def main() -> int:
             advance_domain(conn)
             return 0
 
+        print(f"{domain}: {provenance}")
         print(f"{domain}: {len(rows)} pieces of evidence")
         idea = generate(domain, rows)
-        slug = save(conn, idea, domain)
+        slug = save(conn, idea, domain, theme_id)
         advance_domain(conn)
 
     print(f"\n{idea.get('title')}")
