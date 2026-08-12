@@ -37,30 +37,45 @@ def advance_domain(conn: sqlite3.Connection) -> None:
     set_kv(conn, "rotation_cursor", str(cursor + 1))
 
 
+# Fraction of a theme's evidence that may already have been written about
+# before the theme is considered spent.
+MAX_REUSED_EVIDENCE = 0.5
+
+
 def top_theme(conn: sqlite3.Connection, domain: str) -> sqlite3.Row | None:
-    """Highest evidence-density theme in this domain that hasn't been used yet.
+    """Highest evidence-density theme in this domain whose evidence is mostly unused.
 
     `evidence * weight` is the ranking signal -- corroborated independent voices,
     adjusted by feedback. Explicitly NOT an LLM novelty score, which has been
     shown to anti-correlate with what turns out to matter.
+
+    Exclusion is by *evidence overlap*, not theme identity. Theme keys are hashes
+    of member sets, and members join as the corpus grows, so a used theme quietly
+    becomes a new theme and would be eligible again. Signal ids never change.
     """
     return conn.execute(
         """
-        SELECT t.* FROM theme t
-        WHERE t.domain = ?
-          AND (t.key IS NULL OR t.key NOT IN
-               (SELECT theme_key FROM idea WHERE theme_key IS NOT NULL))
-        ORDER BY (t.evidence * t.weight) DESC
+        SELECT * FROM (
+            SELECT t.*,
+                   CAST((SELECT COUNT(*) FROM theme_member m
+                         WHERE m.theme_id = t.id
+                           AND m.signal_id IN (SELECT signal_id FROM idea_signal))
+                        AS REAL) / MAX(t.size, 1) AS reused
+            FROM theme t
+            WHERE t.domain = ?
+        )
+        WHERE reused < ?
+        ORDER BY (evidence * weight) DESC
         LIMIT 1
         """,
-        (domain,),
+        (domain, MAX_REUSED_EVIDENCE),
     ).fetchone()
 
 
 def theme_evidence(conn: sqlite3.Connection, theme_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT s.url, s.title, s.text, s.pain, s.domain_hits, s.created_utc, s.source
+        SELECT s.id, s.url, s.title, s.text, s.pain, s.domain_hits, s.created_utc, s.source
         FROM signal s
         JOIN theme_member m ON m.signal_id = s.id
         WHERE m.theme_id = ?
@@ -76,7 +91,7 @@ def domain_evidence(conn: sqlite3.Connection, domain: str,
     complaints. Weaker grounding -- uncorroborated -- but better than nothing."""
     return conn.execute(
         """
-        SELECT url, title, text, pain, domain_hits, created_utc, source
+        SELECT id, url, title, text, pain, domain_hits, created_utc, source
         FROM signal
         WHERE domain = ?
         ORDER BY (pain * 2 + domain_hits) DESC, created_utc DESC
@@ -87,7 +102,11 @@ def domain_evidence(conn: sqlite3.Connection, domain: str,
 
 
 def gather_evidence(conn: sqlite3.Connection, domain: str) -> tuple[list[sqlite3.Row], str | None, str]:
-    """Returns (evidence rows, theme key or None, provenance description)."""
+    """Returns (evidence rows, theme key or None, provenance description).
+
+    The theme key is carried for provenance only -- exclusion keys off the
+    signal ids in the returned rows.
+    """
     theme = top_theme(conn, domain)
     if theme is not None:
         rows = list(theme_evidence(conn, theme["id"]))[:EVIDENCE_PER_IDEA]
@@ -163,7 +182,8 @@ def generate(domain: str, rows: list[sqlite3.Row]) -> list[dict]:
     return [c for c in candidates if isinstance(c, dict)]
 
 
-def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_key: str | None) -> str:
+def save(conn: sqlite3.Connection, idea: dict, domain: str,
+         theme_key: str | None, rows: list[sqlite3.Row]) -> str:
     ensure_state_dirs()
     now = int(time.time())
     base = slugify(idea.get("title", ""))
@@ -174,12 +194,18 @@ def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_key: str | Non
     if conn.execute("SELECT 1 FROM idea WHERE slug = ?", (slug,)).fetchone():
         slug = f"{base}-{now}"
 
-    conn.execute(
+    cur = conn.execute(
         """
         INSERT INTO idea (slug, title, body, domain, theme_key, sent_utc)
         VALUES (?, ?, ?, ?, ?, NULL)
         """,
         (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain, theme_key),
+    )
+    # Record the evidence consumed. This is what stops the same pain being
+    # written up twice after re-clustering renames its theme.
+    conn.executemany(
+        "INSERT OR IGNORE INTO idea_signal (idea_id, signal_id) VALUES (?, ?)",
+        [(cur.lastrowid, r["id"]) for r in rows if r["id"] is not None],
     )
     (IDEAS_DIR / f"{now}-{slug}.json").write_text(json.dumps(idea, indent=2))
     return slug
@@ -256,7 +282,7 @@ def main() -> int:
             advance_domain(conn)
             return 0
 
-        slug = save(conn, survivor, domain, theme_key)
+        slug = save(conn, survivor, domain, theme_key, rows)
         ledger.sync(conn, embed_fn)  # the shipped idea joins the dedup ledger
         advance_domain(conn)
 

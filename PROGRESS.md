@@ -132,12 +132,23 @@ generations, distinct ideas topped out at **0.605** and an actual duplicate pair
 **0.830** — so 0.85 let a true duplicate through, which it did. Set to 0.75, in the
 middle of the empty band.
 
-**Two layers, different jobs.** Theme exclusion is the *exact* primary defense (an
-idea records its theme's content hash; that theme is never reused). Embedding dedup is
-the *fuzzy* backstop for when two different themes converge on the same project. A
-hand-written paraphrase of a duplicate scored 0.698 — below threshold — so the fuzzy
-layer genuinely can miss a heavily-reworded repeat. Worth knowing rather than
-pretending otherwise.
+**Theme keys turned out to be unstable, so exclusion moved to evidence.** The Phase 2
+fix replaced recycled rowids with a content hash, which solved *aliasing* but not
+*stability*: a theme's key is a hash of its members, and members join as the corpus
+grows. Measured — **adding 3 rows invalidated 2 of 25 theme keys**. Since harvest runs
+daily, within weeks every used theme quietly becomes a "new" theme and eligible again.
+Confirmed in the live DB: one of the two existing ideas already pointed at a theme key
+that no longer existed.
+
+Exclusion now keys off `idea_signal` — which harvested rows an idea was built from.
+Signal ids never change. A theme is skipped when >50% of its evidence has already been
+written about, and that holds through arbitrary re-clustering. Two regression tests
+cover it, including one that renames a theme and confirms it stays excluded.
+
+So the layers are: **used-evidence overlap** (exact, primary) and **embedding
+similarity** (fuzzy, backstop for two themes converging on the same project). The fuzzy
+layer genuinely can miss — a hand-written paraphrase of a known duplicate scored 0.698,
+below threshold. Worth knowing rather than pretending otherwise.
 
 ## Known gaps
 

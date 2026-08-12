@@ -46,6 +46,77 @@ class TestLedgerVectors:
         assert "w2: more" not in text
 
 
+class TestUsedEvidenceExclusion:
+    """A theme's key is a hash of its members, and members join as the corpus
+    grows -- measured, 3 new rows invalidated 2 of 25 keys. So exclusion cannot
+    key off theme identity; it keys off the signal ids an idea consumed, which
+    never change."""
+
+    def _db(self, tmp_path, monkeypatch):
+        import pipeline.config as cfg
+        import pipeline.db as db
+        monkeypatch.setattr(cfg, "STATE_DIR", tmp_path)
+        monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "t.db")
+        monkeypatch.setattr(cfg, "IDEAS_DIR", tmp_path / "ideas")
+        monkeypatch.setattr(cfg, "DECKS_DIR", tmp_path / "decks")
+        monkeypatch.setattr(cfg, "REJECTS_DIR", tmp_path / "rejects")
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+        return db
+
+    def test_theme_excluded_after_its_evidence_is_used(self, tmp_path, monkeypatch):
+        db = self._db(tmp_path, monkeypatch)
+        from pipeline.ideate import top_theme
+
+        with db.connect() as c:
+            for i in (1, 2, 3):
+                c.execute(
+                    "INSERT INTO signal (id, source, external_id, text, "
+                    "created_utc, harvested_utc, domain) "
+                    "VALUES (?,'hn',?,'x',1,1,'storage')", (i, str(i)))
+            c.execute("INSERT INTO theme (id,key,size,evidence,domain,built_utc) "
+                      "VALUES (1,'aaa',2,9.0,'storage',1)")
+            c.execute("INSERT INTO theme (id,key,size,evidence,domain,built_utc) "
+                      "VALUES (2,'bbb',1,1.0,'storage',1)")
+            c.executemany("INSERT INTO theme_member VALUES (?,?)",
+                          [(1, 1), (1, 2), (2, 3)])
+
+            assert top_theme(c, "storage")["key"] == "aaa", "highest evidence first"
+
+            # an idea consumes theme 1's evidence
+            c.execute("INSERT INTO idea (id,slug,title,body) VALUES (1,'s','t','{}')")
+            c.executemany("INSERT INTO idea_signal VALUES (?,?)", [(1, 1), (1, 2)])
+
+            assert top_theme(c, "storage")["key"] == "bbb", \
+                "spent theme must be skipped even though it still ranks highest"
+
+    def test_exclusion_survives_theme_key_churn(self, tmp_path, monkeypatch):
+        db = self._db(tmp_path, monkeypatch)
+        from pipeline.ideate import top_theme
+
+        with db.connect() as c:
+            for i in (1, 2, 3):
+                c.execute(
+                    "INSERT INTO signal (id, source, external_id, text, "
+                    "created_utc, harvested_utc, domain) "
+                    "VALUES (?,'hn',?,'x',1,1,'storage')", (i, str(i)))
+            c.execute("INSERT INTO theme (id,key,size,evidence,domain,built_utc) "
+                      "VALUES (1,'aaa',2,9.0,'storage',1)")
+            c.executemany("INSERT INTO theme_member VALUES (?,?)", [(1, 1), (1, 2)])
+            c.execute("INSERT INTO idea (id,slug,title,body) VALUES (1,'s','t','{}')")
+            c.executemany("INSERT INTO idea_signal VALUES (?,?)", [(1, 1), (1, 2)])
+
+            # re-cluster: same pain, new rowid, new key, one extra member
+            c.execute("DELETE FROM theme_member")
+            c.execute("DELETE FROM theme")
+            c.execute("INSERT INTO theme (id,key,size,evidence,domain,built_utc) "
+                      "VALUES (1,'zzz-different-key',3,9.0,'storage',1)")
+            c.executemany("INSERT INTO theme_member VALUES (?,?)",
+                          [(1, 1), (1, 2), (1, 3)])
+
+            assert top_theme(c, "storage") is None, \
+                "theme was renamed by re-clustering but its evidence is still spent"
+
+
 class TestPriorArtQueries:
     def test_urls_do_not_leak_vocabulary(self):
         """Queries once came out as 'raft https failover' and 'k8s news

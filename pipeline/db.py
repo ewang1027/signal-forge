@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS theme_member (
 );
 
 
+-- Which harvested rows an idea was actually built from.
+--
+-- This, not the theme key, is what prevents repeats. A theme's identity is
+-- inherently unstable: its key is a hash of its members, and members join as
+-- the corpus grows -- measured, 3 new rows invalidated 2 of 25 theme keys, so
+-- over weeks every theme silently becomes "new" again and eligible for reuse.
+-- The durable question is "have I already written about this evidence?", and
+-- signal ids are stable forever.
+CREATE TABLE IF NOT EXISTS idea_signal (
+    idea_id   INTEGER NOT NULL,
+    signal_id INTEGER NOT NULL,
+    PRIMARY KEY (idea_id, signal_id)
+);
+
 -- Embeddings of every idea ever generated, for the dedup gate. Keyed by a
 -- stable content hash so it can be rebuilt from ideas/*.json, which is the
 -- real ledger -- this table is only a cache.
@@ -132,7 +146,9 @@ INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_signal_created  ON signal(created_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_source   ON signal(source);
 CREATE INDEX IF NOT EXISTS idx_theme_evidence  ON theme(evidence DESC);
-CREATE INDEX IF NOT EXISTS idx_theme_key       ON theme(key);
+CREATE INDEX IF NOT EXISTS idx_theme_key        ON theme(key);
+CREATE INDEX IF NOT EXISTS idx_theme_member_sig ON theme_member(signal_id);
+CREATE INDEX IF NOT EXISTS idx_idea_signal_sig  ON idea_signal(signal_id);
 """
 
 
