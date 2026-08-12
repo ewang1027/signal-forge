@@ -21,7 +21,8 @@
       "prompt": "You put Kafka between two services. What ordering and delivery guarantees have you actually bought?",
       "must_cover": [
         "ordering is per-partition only -- so the partition key IS the ordering decision",
-        "at-least-once by default; exactly-once needs idempotent producers plus transactions, and costs throughput",
+        "since Kafka 3.0 the Java producer is idempotent by default (acks=all), so producer-level dedup is already on; end-to-end exactly-once still needs transactions plus isolation.level=read_committed, costs throughput, and holds only INSIDE Kafka -- never for external side effects",
+        "max.in.flight.requests.per.connection > 1 with retries reorders messages unless idempotence is enabled -- the gotcha that ties ordering and delivery together",
         "consumer rebalance: in-flight messages, partition reassignment, duplicate delivery",
         "consumer lag as the health metric, and what you do when it grows",
         "retention: what happens when a consumer is down longer than the retention window"
@@ -72,13 +73,13 @@
       "name": "Observability cost",
       "prompt": "Your observability bill is now 15% of infrastructure spend and growing 40% a year. What is driving it and what do you cut?",
       "must_cover": [
-        "cardinality is typically 50-70% of the bill -- a single unbounded label (user_id, request_id) explodes a metric",
+        "unbounded label cardinality is the dominant driver -- one user_id label multiplies series count by your user count; metrics are cheap per point and expensive per SERIES",
         "the three signals have different cost profiles: metrics cheap, logs expensive, traces expensive but samplable",
         "head vs tail sampling, and why tail sampling costs more but keeps the interesting traces",
         "retention tiering: hot for days, cold/archived for compliance",
         "what you lose with each cut, stated honestly"
       ],
-      "trap": "Proposing 'more dashboards' as the answer to an incident. In 2026 the interviewer is probing whether you understand that observability has a budget."
+      "trap": "Proposing 'more dashboards' as the answer to an incident. Observability has a budget."
     },
     {
       "id": "failure-blast-radius",
@@ -156,7 +157,7 @@
         "reserved/spot vs on-demand, and the availability tradeoff",
         "cost per unit of business value (per user, per request), not just total"
       ],
-      "trap": "Not costing the design at all. In 2026 'it scales' without 'and here is what it costs' is an incomplete answer, and cross-AZ traffic is the most common blind spot."
+      "trap": "Not costing the design at all. 'it scales' without 'and here is what it costs' is an incomplete answer, and cross-AZ traffic is the most common blind spot."
     },
     {
       "id": "search-index",
@@ -202,8 +203,9 @@
       "name": "Sessions vs tokens",
       "prompt": "Stateless JWTs or server-side sessions?",
       "must_cover": [
-        "JWT revocation is the core problem -- you cannot un-issue a token before expiry",
-        "short-lived access + refresh token, and where the refresh token lives",
+        "JWT revocation is the core problem -- you cannot un-issue a token before expiry, so you keep a jti denylist until expiry, which reintroduces exactly the server state JWTs were meant to avoid; the practical answer is short TTLs plus a small denylist",
+        "alg=none and algorithm-confusion (RS256 key used as an HS256 secret) -- pin the expected algorithm, never trust the header",
+        "short-lived access + refresh token, refresh rotation with reuse detection, and where the refresh token lives",
         "session store lookup cost vs the revocation ability it buys",
         "key rotation and how verifiers learn new keys",
         "where tokens are stored client-side, and the XSS/CSRF tradeoff"
@@ -222,6 +224,33 @@
         "detecting skew before it pages you -- per-key metrics, not just aggregates"
       ],
       "trap": "Assuming uniform distribution. Real workloads are Zipfian, and aggregate dashboards hide a single key saturating one node."
+    },
+    {
+      "id": "opening-ten-minutes",
+      "name": "How to open a design interview",
+      "prompt": "\"Design a URL shortener.\" You have 45 minutes. What are the first ten of them?",
+      "must_cover": [
+        "clarify scope before designing: who uses it, read/write ratio, is it public, what is explicitly OUT of scope",
+        "functional requirements as a short list, then non-functional (latency target, availability target, consistency needs, retention)",
+        "back-of-envelope: QPS from DAU x actions/day / 86400, peak as ~2-3x average, storage as rows x bytes x retention, bandwidth as QPS x payload",
+        "the API sketch -- a handful of endpoints with their request/response shapes",
+        "the data model and the ACCESS PATTERNS it must serve, before choosing a datastore",
+        "only then the high-level diagram, and state where you will go deep"
+      ],
+      "trap": "Diagramming boxes in minute two. Every other card in this deck is a minute-30 follow-up; this is the part that decides whether you get there. Skipping the estimate means every later capacity claim is unsupported."
+    },
+    {
+      "id": "api-pagination",
+      "name": "API design and pagination",
+      "prompt": "Design a list endpoint over a table that grows to 100M rows.",
+      "must_cover": [
+        "cursor (keyset) pagination over OFFSET -- OFFSET n scans and discards n rows, so deep pages get linearly slower",
+        "OFFSET also skips or duplicates rows when the underlying set changes between requests",
+        "the cursor must be an opaque, stable, tie-broken sort key (e.g. created_at + id)",
+        "page size limits, and a hard cap the client cannot override",
+        "versioning and how you deprecate a field without breaking existing clients"
+      ],
+      "trap": "Offering `?page=5000&per_page=100` and not knowing why it is slow. This gets asked constantly and the OFFSET answer is treated as a red flag."
     },
     {
       "id": "operational-maturity",

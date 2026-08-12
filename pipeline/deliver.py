@@ -118,12 +118,25 @@ def render_prep(day: dict) -> str:
 
     blocks = []
 
-    if p := day.get("problem"):
+    if problems := day.get("problems"):
+        items = "".join(
+            f'<li><b>{_esc(p["problem"])}</b> '
+            f'<span class="tag">{_esc(p["pattern"])}</span>'
+            f'<div class="hard">cue: {_esc(p["cue"])}</div></li>'
+            for p in problems
+        )
+        blocks.append(f'<h2>Timed problems — 25 min each</h2><ol>{items}</ol>')
+
+    if stuck := day.get("leeches"):
+        items = "".join(
+            f'<li><b>{_esc(c.get("name"))}</b> — {_esc(c.get("cue") or c.get("prompt"))}</li>'
+            for c in stuck
+        )
         blocks.append(
-            f'<h2>Timed problem — 25 min</h2>'
-            f'<p><b>{_esc(p["problem"])}</b><br>'
-            f'<span class="tag">{_esc(p["pattern"])}</span></p>'
-            f'<div class="hard">recognition cue: {_esc(p["cue"])}</div>'
+            '<h2>Sit down and learn these</h2>'
+            '<p>Failed repeatedly. Reviewing them again tomorrow has been tried '
+            'and did not work — read the source material instead.</p>'
+            f'<ul>{items}</ul>'
         )
 
     if d := day.get("design_prompt"):
@@ -211,8 +224,15 @@ def main() -> int:
         # Prep goes out every day; an idea only on the days one is waiting.
         # Ordering matters: prep must not depend on there being an idea, so a
         # failed ideation run never costs a prep day.
-        day = prep.today(conn)
-        prep_html = render_prep(day)
+        # A hand-edited cards/*.json with a syntax error must not also kill the
+        # Monday/Thursday idea. The comment below claimed protection in one
+        # direction; this makes it true in both.
+        try:
+            day = prep.today(conn)
+            prep_html = render_prep(day)
+        except Exception as exc:
+            print(f"prep failed ({type(exc).__name__}: {exc})", file=sys.stderr)
+            day, prep_html = {}, ""
 
         row = next_unsent(conn) if not args.prep_only else None
         idea = json.loads(row["body"]) if row else None
@@ -244,8 +264,9 @@ def main() -> int:
         conn.commit()
 
         # Push is explicitly a nudge; it must never be able to undo the send.
+        first = (day.get("problems") or [{}])[0].get("problem", "")
         nudge = (f"{subject} — {idea.get('one_liner', '')[:120]}" if idea
-                 else f"{subject}. {(day.get('problem') or {}).get('problem', '')}")
+                 else f"{subject}. {first}")
         try:
             send_push(nudge)
         except Exception as exc:

@@ -81,9 +81,38 @@ CREATE TABLE IF NOT EXISTS review (
     state    TEXT NOT NULL,          -- serialized fsrs.Card
     due_utc  INTEGER NOT NULL,
     reps     INTEGER DEFAULT 0,
-    lapses   INTEGER DEFAULT 0,      -- weak-area signal; drives what resurfaces
+    -- Two different counters on purpose.
+    -- `lapses` keeps strict FSRS semantics: Again on a card already in Review.
+    -- `fails` counts every Again. A card failed from the very first showing
+    -- never graduates out of Learning, so its `lapses` stays 0 forever -- using
+    -- it for weak-area targeting would make the worst-known card invisible.
+    lapses   INTEGER DEFAULT 0,
+    fails    INTEGER DEFAULT 0,      -- weak-area signal; drives what resurfaces
     last_utc INTEGER,
     PRIMARY KEY (deck, card_id)
+);
+
+-- Append-only history of every grade. FSRS needs this for two things that
+-- cannot be reconstructed after the fact: `Scheduler.reschedule_card` (re-derive
+-- a schedule when intensity changes, otherwise cards keep their capped due
+-- dates forever) and `Optimizer` (fit parameters to this person rather than to
+-- the population). Cheap to keep, impossible to backfill.
+CREATE TABLE IF NOT EXISTS review_log (
+    id         INTEGER PRIMARY KEY,
+    deck       TEXT NOT NULL,
+    card_id    TEXT NOT NULL,
+    rating     INTEGER NOT NULL,
+    state_before TEXT,
+    review_utc INTEGER NOT NULL
+);
+
+-- Problems already handed out, so a pattern's rotating set actually rotates
+-- instead of replaying the same question until it is memorized.
+CREATE TABLE IF NOT EXISTS problem_log (
+    card_id   TEXT NOT NULL,
+    problem   TEXT NOT NULL,
+    given_utc INTEGER NOT NULL,
+    PRIMARY KEY (card_id, problem)
 );
 
 -- Which harvested rows an idea was actually built from.
@@ -130,6 +159,9 @@ MIGRATIONS: dict[str, dict[str, str]] = {
     "theme": {
         "key": "TEXT",
         "weight": "REAL DEFAULT 1.0",
+    },
+    "review": {
+        "fails": "INTEGER DEFAULT 0",
     },
     "idea": {
         "theme_id": "INTEGER",
