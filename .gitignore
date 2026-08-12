@@ -6,6 +6,7 @@ state/
 *.db-journal
 *.db-wal
 decks/
+rejects/
 TASTE.md
 
 # secrets

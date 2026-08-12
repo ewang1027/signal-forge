@@ -18,7 +18,7 @@ fail=0
 #    a trimmed copy for the other repo produced an unbalanced `if` and a hook
 #    that errored out instead of checking anything.
 if [ "$(git config --get signalforge.role || echo code)" != "state" ]; then
-  blocked=$(echo "$staged" | grep -E '(^state/|\.db$|\.db-wal$|\.db-journal$|^decks/|(^|/)TASTE\.md$|(^|/)ideas/)' || true)
+  blocked=$(echo "$staged" | grep -E '(^state/|\.db$|\.db-wal$|\.db-journal$|^decks/|(^|/)TASTE\.md$|(^|/)ideas/|(^|/)rejects/)' || true)
   if [ -n "$blocked" ]; then
     echo "BLOCKED: personal state must never be committed to the public repo." >&2
     echo "$blocked" | sed 's/^/  /' >&2

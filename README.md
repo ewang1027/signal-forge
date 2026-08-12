@@ -89,6 +89,32 @@ reasoning, failure recovery, operational maturity — and toward the specific om
 sink candidates: Redis without an eviction policy, Kafka without ordering requirements,
 sharding without rebalancing.
 
+### The gates
+
+Ideation produces three candidates; the gates decide whether any of them ships.
+They run cheapest-first, and **a run that rejects all three sends nothing** — the
+point of a gate is that "nothing" is an acceptable outcome.
+
+| Gate | Cost | What it does |
+|---|---|---|
+| shape | free | required fields present, milestones real |
+| dedup | local embeddings | cosine against every idea ever generated |
+| judged | one model call | prior art + feasibility, against a real repo search |
+
+**Prior art comes from searching GitHub, not from asking the model what exists.**
+Model recall of obscure tooling is unreliable in both directions — it invents
+projects and forgets real ones — so the same grounding principle that governs the
+harvester governs this. The search results go into the prompt as evidence.
+
+A mature tool existing is not automatically fatal: a project attacking a
+*specific documented failure* of an existing tool is often better than a
+greenfield one, because the problem is already proven real. What is fatal is
+rebuilding something that works fine with no articulated gap.
+
+When the gate pushes back but the idea survives, **the objection ships with it**.
+It is usually the sharpest paragraph in the email, and hiding it would misrepresent
+what the pipeline concluded.
+
 ### The feedback loop
 
 A push-only system gets ignored within a month. Replying to the digest with `boring`,

@@ -106,6 +106,39 @@ corpus reaches 1,000 rows in years. The real cost is re-embedding every row on e
 build (cache vectors per `signal.id`), and the real constraint on corpus size is the
 pain lexicon, not any API limit.
 
+## Phase 3 — anti-slop gates (done)
+
+Ideation generates 3 candidates in one call; gates run cheapest-first (shape →
+embedding dedup → one model call for prior art + feasibility); the first survivor
+ships and **nothing ships if all three fail**. Rejects are kept in `rejects/` — they
+are the only way to tell whether the gates are calibrated or merely strict.
+
+**Verification step 4 passes.** Fed the plan's test case — "build a distributed
+tracing system" — the gate killed it with: *the stated hard part (context propagation)
+is a solved one-liner via W3C `traceparent`, and the first weekend is scaffolding that
+proves nothing.* That is the right rejection for the right reason.
+
+**Two bugs caught while writing, both silent-failure class:**
+
+- `hash()` is salted per process, so the ledger key would have differed every run and
+  the dedup would have matched nothing, forever. Uses sha1 now.
+- The prior-art query builder sliced the one-liner into consecutive 3-grams, producing
+  queries like `daemon host independently` that matched zero repositories — a gate that
+  always returns "no prior art found" is worse than no gate. Rebuilt on the domain
+  lexicon; URLs in the prose were also leaking `https` and `news` into queries.
+
+**Dedup threshold measured, not guessed.** The plan specified 0.85. Against real
+generations, distinct ideas topped out at **0.605** and an actual duplicate pair scored
+**0.830** — so 0.85 let a true duplicate through, which it did. Set to 0.75, in the
+middle of the empty band.
+
+**Two layers, different jobs.** Theme exclusion is the *exact* primary defense (an
+idea records its theme's content hash; that theme is never reused). Embedding dedup is
+the *fuzzy* backstop for when two different themes converge on the same project. A
+hand-written paraphrase of a duplicate scored 0.698 — below threshold — so the fuzzy
+layer genuinely can miss a heavily-reworded repeat. Worth knowing rather than
+pretending otherwise.
+
 ## Known gaps
 
 - Remaining harvest noise is **argumentative, not off-topic** — k8s-vs-docker flamewars
@@ -113,7 +146,11 @@ pain lexicon, not any API limit.
   about a system" from "complaining about an article about a system".
 - `deliver.py` is only exercised via `--dry-run`; no Resend key yet, so a real send is
   unverified.
-- No gates yet (dedup, prior-art, feasibility) — ideas ship unfiltered until Phase 3.
+- **`reframe` verdicts currently ship with a note attached** rather than being rewritten
+  or rejected. Open question whether that is right: one observed run shipped an idea the
+  gate described as having an "inflated" hard core with a weekend 1 that is "mostly
+  plumbing". The critique is genuinely valuable content, but shipping a known-weak idea
+  with a warning is not obviously better than trying the next candidate.
 - **Lobsters items get `created_utc = since`**, not a real timestamp — the per-comment
   dates are strings that weren't worth parsing during Phase 2. This feeds the recency
   decay in `evidence_score()`, so lobsters evidence is mis-weighted. Fix before the
@@ -185,15 +222,11 @@ uv run python -m pipeline.deliver --dry-run          # renders build/digest.html
 
 State lives in `../signal-forge-state`. Delete `signal.db` to start the corpus over.
 
-**Next up is Phase 3** (anti-slop gates): dedup ledger via embedding similarity against
-every idea ever sent, prior-art search, feasibility pass, `TASTE.md`. Phases 4-5 after
-that. Nothing is wired to GitHub Actions yet — no workflow files, no external cron.
-
-**Phase 3 must treat `ideas/*.json` as the source of truth, not the `idea` table.**
-Deleting `signal.db` during a corpus rebuild drops the table but leaves the JSON files
-intact — that already happened once, leaving 4 files against 1 table row. Since the whole
-point of the dedup ledger is that it never forgets an idea, it has to rebuild itself from
-the files rather than trusting the DB.
+**Next up is Phase 4** (interview prep): FSRS scheduler over two decks — DSA *patterns*
+rather than individual problems, and system design weighted toward cost reasoning,
+failure recovery, and operational maturity. Needs an interview target date to ramp
+backward from. Then Phase 5 (feedback loop + quality canary). Nothing is wired to
+GitHub Actions yet — no workflow files, no external cron.
 
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the
