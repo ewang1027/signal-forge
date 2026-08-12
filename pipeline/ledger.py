@@ -109,8 +109,17 @@ def nearest(conn: sqlite3.Connection, vec: np.ndarray) -> tuple[float, str]:
     if not rows:
         return 0.0, ""
 
-    matrix = np.vstack([_unpack(r["vec"]) for r in rows])
+    # Skip rows of a different dimension rather than letting np.vstack raise.
+    # Changing the embedding model would otherwise poison the ledger and take
+    # down the whole run from inside the dedup gate.
+    dim = len(vec)
+    usable = [(r["title"], _unpack(r["vec"])) for r in rows]
+    usable = [(t, v) for t, v in usable if len(v) == dim]
+    if not usable:
+        return 0.0, ""
+
+    matrix = np.vstack([v for _, v in usable])
     # embeddings are L2-normalised at encode time, so a dot product is cosine
     sims = matrix @ vec.astype(np.float32)
     best = int(np.argmax(sims))
-    return float(sims[best]), rows[best]["title"]
+    return float(sims[best]), usable[best][0]

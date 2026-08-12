@@ -40,8 +40,11 @@ def check_shape(idea: dict) -> Verdict:
     missing = [k for k in required if not idea.get(k)]
     if missing:
         return Verdict(False, "shape", f"missing fields: {', '.join(missing)}")
-    if len(idea.get("milestones") or []) < 2:
-        return Verdict(False, "shape", "fewer than 2 milestones")
+    milestones = idea.get("milestones")
+    # Must be a list: a bare string of length >= 2 passed a len() check and the
+    # digest then rendered it one character per <li>.
+    if not isinstance(milestones, list) or len(milestones) < 2:
+        return Verdict(False, "shape", "milestones must be a list of 2+ items")
     return Verdict(True, "shape", "well formed")
 
 
@@ -60,23 +63,34 @@ def check_dedup(conn: sqlite3.Connection, idea: dict, embed_fn) -> Verdict:
                    {"similarity": sim, "matched": title})
 
 
-def check_judged(idea: dict) -> Verdict:
+PASSING_VERDICTS = {"ship", "reframe"}
+
+
+def check_judged(idea: dict, domain: str | None = None) -> Verdict:
     """Prior art and feasibility, judged against a real repository search."""
-    repos = search(idea)
+    repos, searched_ok = search(idea, domain)
     template = (PROMPTS_DIR / "gate.md").read_text()
     prompt = (template
               .replace("{candidate}", json.dumps(idea, indent=2))
-              .replace("{prior_art}", format_for_prompt(repos)))
+              .replace("{prior_art}", format_for_prompt(repos, searched_ok)))
 
     result = complete_json(prompt)
-    verdict = (result.get("verdict") or "").lower()
+    if not isinstance(result, dict):
+        return Verdict(False, "judged", "gate returned a non-object")
+
+    verdict = (result.get("verdict") or "").strip().lower()
     reason = result.get("reason", "")
 
-    if verdict == "kill":
-        return Verdict(False, "judged", reason, result)
+    # Allow-list, not a deny-list. Checking only for "kill" meant an empty
+    # object, a null verdict, a truncated response, or the word "reject" all
+    # shipped -- a gate whose default on malformed output is *pass* is not a
+    # gate.
+    if verdict not in PASSING_VERDICTS:
+        return Verdict(False, "judged",
+                       f"verdict {verdict or '(missing)'!r}: {reason}", result)
     if result.get("feasibility") == "unrealistic":
         return Verdict(False, "judged", f"unrealistic scope: {reason}", result)
-    return Verdict(True, "judged", f"{verdict or 'ship'}: {reason}", result)
+    return Verdict(True, "judged", f"{verdict}: {reason}", result)
 
 
 def apply_judgement(idea: dict, result: dict) -> dict:
@@ -99,7 +113,8 @@ def apply_judgement(idea: dict, result: dict) -> dict:
     return out
 
 
-def run(conn: sqlite3.Connection, idea: dict, embed_fn) -> tuple[bool, dict, list[Verdict]]:
+def run(conn: sqlite3.Connection, idea: dict, embed_fn,
+        domain: str | None = None) -> tuple[bool, dict, list[Verdict]]:
     """Returns (survived, possibly-revised idea, verdicts in order)."""
     verdicts: list[Verdict] = []
 
@@ -110,7 +125,7 @@ def run(conn: sqlite3.Connection, idea: dict, embed_fn) -> tuple[bool, dict, lis
         if not v.ok:
             return False, idea, verdicts
 
-    v = check_judged(idea)
+    v = check_judged(idea, domain)
     verdicts.append(v)
     if not v.ok:
         return False, idea, verdicts

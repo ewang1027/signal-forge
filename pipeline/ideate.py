@@ -14,7 +14,10 @@ import sqlite3
 import sys
 import time
 
+from pathlib import Path
+
 from . import gate, ledger, taste
+from .gate import Verdict
 from .config import IDEAS_DIR, PROMPTS_DIR, REJECTS_DIR, ensure_state_dirs
 from .db import connect, get_kv, set_kv
 from .domains import ROTATION
@@ -38,7 +41,9 @@ def advance_domain(conn: sqlite3.Connection) -> None:
 
 
 # Fraction of a theme's evidence that may already have been written about
-# before the theme is considered spent.
+# before the theme is considered spent. Comparison is `<=` so that a 2-member
+# theme with one cited row (exactly 0.5) stays eligible -- most themes are
+# size 2, and `<` would retire them on a single shared row.
 MAX_REUSED_EVIDENCE = 0.5
 
 
@@ -64,7 +69,7 @@ def top_theme(conn: sqlite3.Connection, domain: str) -> sqlite3.Row | None:
             FROM theme t
             WHERE t.domain = ?
         )
-        WHERE reused < ?
+        WHERE reused <= ?
         ORDER BY (evidence * weight) DESC
         LIMIT 1
         """,
@@ -88,12 +93,18 @@ def theme_evidence(conn: sqlite3.Connection, theme_id: int) -> list[sqlite3.Row]
 def domain_evidence(conn: sqlite3.Connection, domain: str,
                     limit: int = EVIDENCE_PER_IDEA) -> list[sqlite3.Row]:
     """Fallback when a domain has no clustered theme yet: strongest individual
-    complaints. Weaker grounding -- uncorroborated -- but better than nothing."""
+    complaints. Weaker grounding -- uncorroborated -- but better than nothing.
+
+    Excludes already-cited rows for the same reason `top_theme` does. Without
+    that, this deterministic ordering hands back the identical 14 rows on every
+    visit forever, and the fallback becomes a duplicate-idea generator.
+    """
     return conn.execute(
         """
         SELECT id, url, title, text, pain, domain_hits, created_utc, source
         FROM signal
         WHERE domain = ?
+          AND id NOT IN (SELECT signal_id FROM idea_signal)
         ORDER BY (pain * 2 + domain_hits) DESC, created_utc DESC
         LIMIT ?
         """,
@@ -183,7 +194,11 @@ def generate(domain: str, rows: list[sqlite3.Row]) -> list[dict]:
 
 
 def save(conn: sqlite3.Connection, idea: dict, domain: str,
-         theme_key: str | None, rows: list[sqlite3.Row]) -> str:
+         theme_key: str | None, rows: list[sqlite3.Row]) -> tuple[str, Path]:
+    """DB writes only. The JSON file is written by the caller *after* commit --
+    ideas/*.json is the dedup ledger's source of truth, so a file written for a
+    transaction that later rolls back would permanently block regenerating an
+    idea that was never recorded and can never be sent."""
     ensure_state_dirs()
     now = int(time.time())
     base = slugify(idea.get("title", ""))
@@ -201,20 +216,26 @@ def save(conn: sqlite3.Connection, idea: dict, domain: str,
         """,
         (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain, theme_key),
     )
-    # Record the evidence consumed. This is what stops the same pain being
-    # written up twice after re-clustering renames its theme.
+    # Record only the evidence the idea actually *cited*, not everything it was
+    # shown. gather_evidence pads a theme out to 14 rows with unrelated
+    # domain-wide material, so recording `rows` marked ~14 signals consumed for
+    # a 3-member theme -- enough to burn a whole domain's themes with one idea.
+    # evidence_refs has already been validated against the corpus.
+    cited = set(idea.get("evidence_refs") or [])
+    used = [r["id"] for r in rows if r["id"] is not None and r["url"] in cited]
     conn.executemany(
         "INSERT OR IGNORE INTO idea_signal (idea_id, signal_id) VALUES (?, ?)",
-        [(cur.lastrowid, r["id"]) for r in rows if r["id"] is not None],
+        [(cur.lastrowid, sid) for sid in used],
     )
-    (IDEAS_DIR / f"{now}-{slug}.json").write_text(json.dumps(idea, indent=2))
-    return slug
+    return slug, IDEAS_DIR / f"{now}-{slug}.json"
 
 
-def save_reject(candidate: dict, verdicts: list, domain: str) -> None:
+def save_reject(candidate: dict, verdicts: list, domain: str, index: int = 0) -> None:
     ensure_state_dirs()
     now = int(time.time())
-    slug = slugify(candidate.get("title", ""))
+    # Index disambiguates: shape rejection is instant, so two untitled
+    # candidates in the same second would otherwise write the same filename.
+    slug = f"{slugify(candidate.get('title', ''))}-{index}"
     payload = {
         "domain": domain,
         "rejected_utc": now,
@@ -263,9 +284,21 @@ def main() -> int:
                 candidate["evidence_refs"] = validate_refs(candidate, rows)
             except UngroundedIdea as exc:
                 print(f"    [REJECT] grounding: {exc}")
+                # Fabricated-citation rejects are the highest-value calibration
+                # data there is; they were the one class never being recorded.
+                save_reject(candidate, [Verdict(False, "grounding", str(exc))],
+                            domain, i)
                 continue
 
-            ok, revised, verdicts = gate.run(conn, candidate, embed_fn)
+            # A failure on one candidate must not discard the other two -- they
+            # are already paid for, and with Mon/Thu delivery a network blip on
+            # candidate 1 would otherwise cost a whole send.
+            try:
+                ok, revised, verdicts = gate.run(conn, candidate, embed_fn, domain)
+            except Exception as exc:
+                print(f"    [ERROR] gate: {type(exc).__name__}: {exc}", file=sys.stderr)
+                continue
+
             for v in verdicts:
                 print(f"    {v}")
             if ok:
@@ -273,18 +306,24 @@ def main() -> int:
                 break
             # Keep rejects. They are the only way to tell whether the gates are
             # calibrated or just strict, and they cost nothing to store.
-            save_reject(candidate, verdicts, domain)
+            save_reject(candidate, verdicts, domain, i)
 
         if survivor is None:
             # Every candidate failed. Do NOT ship the least-bad one -- the gates
-            # exist precisely to make "nothing" an acceptable outcome.
+            # exist precisely to make "nothing" an acceptable outcome. Exit 2 so
+            # a run that shipped nothing is distinguishable from one that did.
             print("\nall candidates rejected; nothing to ship")
             advance_domain(conn)
-            return 0
+            return 2
 
-        slug = save(conn, survivor, domain, theme_key, rows)
-        ledger.sync(conn, embed_fn)  # the shipped idea joins the dedup ledger
+        slug, path = save(conn, survivor, domain, theme_key, rows)
         advance_domain(conn)
+
+    # Transaction is committed here. Only now is it safe to write the file that
+    # the dedup ledger treats as proof the idea exists.
+    path.write_text(json.dumps(survivor, indent=2))
+    with connect() as conn:
+        ledger.sync(conn, embed_fn)
 
     print(f"\n{survivor.get('title')}")
     print(f"  {survivor.get('one_liner')}")

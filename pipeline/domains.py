@@ -98,6 +98,32 @@ def _compile(terms: list[str]) -> re.Pattern[str]:
 
 _DOMAIN_RE = {d: _compile(terms) for d, terms in DOMAINS.items()}
 
+# Per-entry patterns, so callers can dedup by lexicon entry rather than by
+# matched text. Matters for stems: `shard*` matches both "sharded" and
+# "sharding", which are one concept, not two.
+_ENTRY_RE = {d: [(t, _compile([t])) for t in terms] for d, terms in DOMAINS.items()}
+
+
+def matched_terms(text: str, domain: str | None = None) -> list[str]:
+    """Lexicon terms present in `text`, one per lexicon entry.
+
+    Pass `domain` to search that domain's vocabulary first. Without it, results
+    come back in DOMAINS insertion order, which silently biases anything that
+    treats the first term as the topic -- that is how a SQLite idea ended up
+    being searched for as "sharded sharding".
+    """
+    order = [domain] if domain in DOMAINS else []
+    order += [d for d in DOMAINS if d not in order]
+
+    out: dict[str, str] = {}
+    for d in order:
+        for entry, rx in _ENTRY_RE[d]:
+            if entry in out:
+                continue
+            if m := rx.search(text):
+                out[entry] = m.group(0).lower()
+    return list(out.values())
+
 
 def score(text: str) -> dict[str, int]:
     """Distinct domain terms matched, per domain."""

@@ -46,6 +46,68 @@ class TestLedgerVectors:
         assert "w2: more" not in text
 
 
+class TestVerdictIsAllowListed:
+    """check_judged once rejected only the literal string "kill", so an empty
+    object, a null verdict, or the word "reject" all shipped. A gate whose
+    default on malformed output is *pass* is not a gate."""
+
+    def _decide(self, result):
+        from pipeline.gate import PASSING_VERDICTS
+        verdict = (result.get("verdict") or "").strip().lower()
+        if verdict not in PASSING_VERDICTS:
+            return False
+        return result.get("feasibility") != "unrealistic"
+
+    def test_malformed_responses_do_not_ship(self):
+        for payload in ({}, {"verdict": None}, {"verdict": ""},
+                        {"verdict": "reject"}, {"verdict": "no"},
+                        {"verdict": "do not build"}, {"reason": "truncated"}):
+            assert not self._decide(payload), f"{payload!r} must not ship"
+
+    def test_documented_verdicts_ship(self):
+        assert self._decide({"verdict": "ship"})
+        assert self._decide({"verdict": "reframe"})
+        assert self._decide({"verdict": "SHIP  "})
+
+    def test_kill_and_unrealistic_do_not_ship(self):
+        assert not self._decide({"verdict": "kill"})
+        assert not self._decide({"verdict": "ship", "feasibility": "unrealistic"})
+
+
+class TestDomainScopedQueries:
+    """queries_for did not receive the domain, so DOMAINS insertion order made
+    `distributed` terms anchor every query -- a SQLite crash-explorer was
+    searched for as "sharded sharding" and returned connection poolers."""
+
+    def test_storage_idea_searches_storage_terms(self):
+        idea = _idea(
+            title="crash-point explorer for sqlite",
+            one_liner="boot a sqlite database in post-crash states",
+            problem="committed transactions vanish; wal recovery is subtle",
+            why_hard="fsync barriers and durability semantics",
+        )
+        joined = " ".join(queries_for(idea, "storage"))
+        assert "sqlite" in joined
+        assert "shard" not in joined, "distributed jargon must not anchor a storage idea"
+
+    def test_stems_collapse_to_one_term(self):
+        # `shard*` matches both "sharded" and "sharding"; they are one concept
+        idea = _idea(one_liner="sharded writes with sharding logic")
+        qs = queries_for(idea, "distributed")
+        assert not any("shard" in q.split()[0] and "shard" in q.split()[-1]
+                       for q in qs if len(q.split()) > 1), \
+            f"one concept produced a two-word query of itself: {qs}"
+
+    def test_domain_terms_lead(self):
+        idea = _idea(
+            one_liner="a type checker with kubernetes in the description",
+            problem="compiler inference is slow",
+            why_hard="constraint solving",
+        )
+        first = queries_for(idea, "compilers")[0]
+        assert "kubernetes" not in first
+
+
 class TestUsedEvidenceExclusion:
     """A theme's key is a hash of its members, and members join as the corpus
     grows -- measured, 3 new rows invalidated 2 of 25 keys. So exclusion cannot

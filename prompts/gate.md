@@ -37,7 +37,7 @@ scope that only sounds hard because it is vague.
 
 One JSON object in a ```json fence, nothing outside it:
 
-{{
+{
   "verdict": "ship" | "reframe" | "kill",
   "reason": "one or two sentences, specific. name the project or the weak step.",
   "prior_art_note": "what exists and precisely where it falls short, or 'none found that covers this'",
@@ -45,6 +45,6 @@ One JSON object in a ```json fence, nothing outside it:
   "feasibility": "tight" | "optimistic" | "unrealistic",
   "revised_first_weekend": "if the stated first weekend does not prove the core, replace it. otherwise repeat it.",
   "reframe": "if verdict is reframe, the sharper version of this project in 1-2 sentences. otherwise null."
-}}
+}
 
 Use "kill" when the idea is genuinely not worth building. Do not soften it.

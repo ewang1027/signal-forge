@@ -49,7 +49,7 @@ Do not pad. No "this could be extended to..." sections.
 Emit a JSON array of exactly three objects inside a ```json fence, no prose
 outside it. Order them best-first. Each object:
 
-{{
+{
   "title": "short, concrete, names the thing being built",
   "one_liner": "one sentence a competent engineer would understand",
   "problem": "2-3 sentences on the real underlying problem, referencing the evidence",
@@ -60,4 +60,4 @@ outside it. Order them best-first. Each object:
   "milestones": ["weekend 2-3: ...", "weekend 4-5: ...", "weekend 6-8: ..."],
   "prior_art": "what already exists and specifically where it falls short, or 'none found' with what you checked",
   "kill_criteria": "what would tell you within 2 weekends that this is not worth finishing"
-}}
+}
