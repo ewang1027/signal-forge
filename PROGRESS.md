@@ -102,6 +102,12 @@ State lives in `../signal-forge-state`. Delete `signal.db` to start the corpus o
 every idea ever sent, prior-art search, feasibility pass, `TASTE.md`. Phases 4-5 after
 that. Nothing is wired to GitHub Actions yet — no workflow files, no external cron.
 
+**Phase 3 must treat `ideas/*.json` as the source of truth, not the `idea` table.**
+Deleting `signal.db` during a corpus rebuild drops the table but leaves the JSON files
+intact — that already happened once, leaving 4 files against 1 table row. Since the whole
+point of the dedup ledger is that it never forgets an idea, it has to rebuild itself from
+the files rather than trusting the DB.
+
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the
 Phase 4 ramp. Never set `ANTHROPIC_API_KEY` — it takes precedence and bills the API
