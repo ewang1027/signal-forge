@@ -7,11 +7,11 @@
       "name": "Caching and eviction",
       "prompt": "You propose Redis in front of the database. What must you specify before that is a real answer?",
       "must_cover": [
+        "cache-aside vs read-through -- cache-aside is the common pattern and puts invalidation on you",
         "eviction policy (LRU / LFU / TTL) and WHY that one for this access pattern",
+        "the cache-aside stale-entry race: a read miss interleaved with a write can cache a stale value PERMANENTLY -- fixed by delete-on-write plus short TTL, or versioned keys",
         "what happens on a miss -- thundering herd, and single-flight or request coalescing",
-        "invalidation: write-through vs write-behind vs TTL-only, and the staleness you accept",
-        "memory sizing and what gets evicted first when it fills",
-        "cold-start behavior after a restart or failover"
+        "memory sizing, what gets evicted first when it fills, and cold-start after a failover"
       ],
       "trap": "Saying 'add Redis' and stopping. The interviewer is waiting for eviction policy and invalidation; without them you have proposed an unbounded memory leak with a stale-data bug."
     },
@@ -47,13 +47,13 @@
       "name": "Consistency models",
       "prompt": "Where in your design is eventual consistency acceptable, and where is it a bug?",
       "must_cover": [
-        "name the model: linearizable, sequential, causal, read-your-writes, eventual",
-        "the concrete anomaly each one permits, in product terms",
+        "name the MODEL: linearizable, sequential, causal, eventual -- and separately the SESSION guarantees, which are a different axis: read-your-writes, monotonic reads, monotonic writes",
+        "monotonic reads is the anomaly users actually report -- time running backward as successive requests hit different replicas",
+        "transaction isolation is a THIRD axis, not the same question: read committed / repeatable read / snapshot isolation / serializable, and write skew as the anomaly SI still permits",
         "read-your-writes for the user's own edits -- usually non-negotiable",
-        "cost: linearizability requires coordination, which costs latency and availability under partition",
-        "where you deliberately accept staleness and how the UI hides it"
+        "cost: linearizability requires coordination, so latency and availability under partition (PACELC, not just CAP)"
       ],
-      "trap": "Saying 'eventually consistent' as if it were a single guarantee. The follow-up is always 'what can a user actually observe', and that requires naming the anomaly."
+      "trap": "Saying 'eventually consistent' as if it were one guarantee, and conflating replication consistency with transaction isolation. The follow-up is always 'what can a user actually observe', which requires naming the anomaly."
     },
     {
       "id": "idempotency",
@@ -63,6 +63,7 @@
         "idempotency key supplied by the client, stored with the result",
         "how long you retain keys, and what a replay after expiry does",
         "the write must be atomic with recording the key -- otherwise the crash window reintroduces the bug",
+        "the concurrency window, not just the crash window: two retries in flight at once. Insert the key in a PENDING state behind a uniqueness constraint so the loser blocks or gets in-flight status -- a plain check-then-act still double-charges",
         "distinguishing retry from a genuine second request",
         "retry policy: exponential backoff with jitter, and a budget so retries cannot amplify an outage"
       ],
@@ -75,7 +76,7 @@
       "must_cover": [
         "unbounded label cardinality is the dominant driver -- one user_id label multiplies series count by your user count; metrics are cheap per point and expensive per SERIES",
         "the three signals have different cost profiles: metrics cheap, logs expensive, traces expensive but samplable",
-        "head vs tail sampling, and why tail sampling costs more but keeps the interesting traces",
+        "tail sampling costs more because you must ingest, route all spans of a trace to one collector, and buffer 100% of them until the trace completes before deciding -- it moves cost from backend storage to collector memory and network",
         "retention tiering: hot for days, cold/archived for compliance",
         "what you lose with each cut, stated honestly"
       ],
@@ -153,6 +154,7 @@
       "must_cover": [
         "estimate the dominant cost: usually egress, storage growth, or always-on compute",
         "cross-AZ and egress traffic -- frequently the surprise line item",
+        "NAT gateway data-processing charges, which routinely exceed cross-AZ transfer and are the most commonly missed line item",
         "storage growth rate and retention policy, because storage only accumulates",
         "reserved/spot vs on-demand, and the availability tradeoff",
         "cost per unit of business value (per user, per request), not just total"
@@ -183,7 +185,7 @@
         "data residency (GDPR) may force partitioning regardless of latency",
         "cross-region replication cost and lag"
       ],
-      "trap": "Jumping to active-active. It is a large step up in complexity, and read replicas plus edge caching often solve the actual latency complaint."
+      "trap": "Jumping to active-active. But also: read replicas break read-your-writes -- the user writes to us-east, reads the EU replica, and their own edit is gone. Sticky routing for a lag window is the fix, and saying so is what makes 'just add replicas' a real answer."
     },
     {
       "id": "queue-vs-stream",
@@ -191,6 +193,7 @@
       "prompt": "When do you use SQS-style queueing rather than a Kafka-style log?",
       "must_cover": [
         "queue: work distribution, per-message ack, deletion after consumption, easy competing consumers",
+        "SQS standard is UNORDERED and at-least-once; FIFO queues order per message group at much lower throughput. That, not replay, is usually the real deciding factor",
         "log: replayable, multiple independent consumers, ordered per partition, retention-based",
         "replay requirement is usually the deciding question",
         "DLQ handling and poison-message policy in both",
@@ -219,6 +222,7 @@
       "must_cover": [
         "hot partition/shard, and why more capacity does not help a single key",
         "key splitting/salting, and the read-side fan-out it forces",
+        "read hot keys and write hot keys need different fixes: salting/splitting is a WRITE-path fix; for reads you replicate the key or put a short-TTL near-cache in front with request coalescing",
         "per-tenant quotas and isolation so one tenant cannot starve others",
         "dedicated infrastructure for outlier tenants",
         "detecting skew before it pages you -- per-key metrics, not just aggregates"
@@ -258,12 +262,26 @@
       "prompt": "The design is done. How do you deploy and operate it?",
       "must_cover": [
         "deploy strategy: canary or blue-green, and the automated rollback trigger",
+        "feature flags decouple deploy from release -- the most important modern answer, and separate from canary/blue-green",
         "SLO with an error budget, and what the budget being spent actually changes",
         "the alerts you would page on -- symptoms users feel, not causes",
         "runbook for the top two failure modes",
         "what you would test in a game day / failure injection"
       ],
       "trap": "Ending at the architecture diagram. 2026 interviews explicitly probe operational maturity, and 'how do you know it is broken' is a standard follow-up."
+    },
+    {
+      "id": "dual-writes-outbox",
+      "name": "Dual writes and the outbox",
+      "prompt": "You write to Postgres and publish to Kafka. How do you make those atomic?",
+      "must_cover": [
+        "you cannot atomically write two systems -- either can fail after the other succeeds",
+        "transactional outbox: write the event to an outbox TABLE in the same transaction as the business row, then a relay publishes it",
+        "change data capture (Debezium) reading the WAL as the relay, and why that beats polling",
+        "the relay is at-least-once, so consumers still need idempotency or dedup on event id",
+        "sagas with compensating actions when the work genuinely spans services and 2PC is off the table"
+      ],
+      "trap": "'Write to the DB, then publish.' If the process dies between them the event is lost forever and nothing detects it. This is the most common distributed-data bug in practice and it gets asked directly."
     }
   ]
 }

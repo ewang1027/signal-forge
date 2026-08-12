@@ -6,7 +6,7 @@
       "id": "two-pointers",
       "name": "Two pointers",
       "cue": "Sorted array (or sortable) and you need a pair/triple meeting a condition. Also: comparing from both ends, or partitioning in place.",
-      "invariant": "Every step provably eliminates one candidate from consideration, so O(n) replaces O(n^2).",
+      "invariant": "Each step discards every remaining candidate involving one endpoint -- not just one pair. That is why n moves can cover n^2 pairs.",
       "trap": "Reaching for it on unsorted input where sorting destroys required index order. Return indices before sorting, or use a hashmap instead.",
       "problems": [
         "3Sum",
@@ -33,7 +33,7 @@
       "id": "monotonic-stack",
       "name": "Monotonic stack",
       "cue": "'Next greater / previous smaller' for every element, or a histogram-shaped problem.",
-      "invariant": "The stack holds indices whose answer is still unresolved, in monotone order. An element is popped exactly when its answer is found.",
+      "invariant": "The stack holds indices whose answer is still unresolved, in monotone order. For NEXT greater/smaller the answer is found at pop time; for PREVIOUS smaller it is whatever remains on top after popping, i.e. determined at push time.",
       "trap": "Storing values instead of indices when the answer needs a distance. Also forgetting to drain the stack at the end.",
       "problems": [
         "Daily Temperatures",
@@ -60,7 +60,7 @@
       "name": "Prefix sum + hashmap",
       "cue": "Count or find subarrays summing to k, especially with negatives (where sliding window fails).",
       "invariant": "sum(i..j) == prefix[j] - prefix[i-1]; store counts of seen prefixes to find complements in O(1).",
-      "trap": "Forgetting to seed the map with {0: 1} for subarrays starting at index 0.",
+      "trap": "The seed depends on the question. {0: 1} when COUNTING subarrays (Subarray Sum Equals K); {0: -1} when finding the LONGEST (Contiguous Array, Continuous Subarray Sum) because there you store the earliest index, not a count. Drilling one seed breaks half these problems.",
       "problems": [
         "Subarray Sum Equals K",
         "Contiguous Array",
@@ -73,7 +73,7 @@
       "name": "Union-Find (DSU)",
       "cue": "Dynamic connectivity, grouping, or 'are these two in the same component' with edges arriving over time.",
       "invariant": "Path compression + union by rank gives near-O(1) amortized (inverse Ackermann).",
-      "trap": "Using it when you need to REMOVE edges -- DSU is add-only. Process offline in reverse if the problem deletes.",
+      "trap": "Using it when you need to REMOVE edges -- DSU is add-only. If edges are ONLY ever removed, process offline in reverse so removals become additions. If adds and removes interleave that does not help: you need DSU with rollback (union by rank, NO path compression) over a segment tree on the time axis.",
       "problems": [
         "Number of Provinces",
         "Redundant Connection",
@@ -101,7 +101,7 @@
       "name": "Dijkstra / weighted shortest path",
       "cue": "Shortest path with non-negative weights. Also: 'minimize the maximum edge' variants with a modified relaxation.",
       "invariant": "With non-negative weights, once a node is popped its distance is final. Negative edges break exactly that.",
-      "trap": "The finality property also fails under an added constraint. In 'Cheapest Flights Within K Stops' the first pop may be cheapest but use too many stops, so you must key state on (node, stops) or run Bellman-Ford for K+1 rounds. Separately: forgetting to skip stale heap entries stays CORRECT but re-expands finalized nodes, taking worst case from O(E log V) to O(V*E).",
+      "trap": "Do NOT mark a node settled when you PUSH it -- that habit transfers from BFS and silently returns wrong distances, because a shorter path may still be found before it is popped. The finality property also fails under an added constraint: in 'Cheapest Flights Within K Stops' the cheapest arrival may use too many stops, so state is (node, stops), not node. Skipping stale heap entries is only a performance guard -- omit it and you stay correct.",
       "problems": [
         "Network Delay Time",
         "Path With Minimum Effort",
@@ -114,7 +114,7 @@
       "name": "BFS on implicit graphs",
       "cue": "Shortest number of steps where each move costs 1, and states are generated rather than stored (word ladders, board states, lock combinations).",
       "invariant": "BFS visits states in nondecreasing distance, so the first time you reach a state is optimal.",
-      "trap": "Marking visited on dequeue rather than enqueue -- this admits duplicates and can blow up exponentially.",
+      "trap": "Marking visited on DEQUEUE rather than enqueue -- the same state gets pushed once per incoming edge, so the queue swells from O(V) to O(E). Still correct and still O(V+E), but a memory bomb on wide implicit graphs. The exponential case is omitting the visited set entirely, which enumerates paths instead of states.",
       "problems": [
         "Word Ladder",
         "Open the Lock",
@@ -141,7 +141,7 @@
       "id": "dp-intervals",
       "name": "Interval DP",
       "cue": "Answer for a range depends on splitting it at some k -- merging stones, bursting balloons, matrix chains.",
-      "invariant": "dp[i][j] = best over k in (i,j) of dp[i][k] + dp[k][j] + cost. Iterate by increasing length.",
+      "invariant": "Two conventions, and mixing them is the classic off-by-one. OPEN/boundary: dp[i][j] covers what is strictly between i and j, split dp[i][k] + dp[k][j] + cost (Burst Balloons, matrix chain). CLOSED: dp[i][j] covers i..j inclusive, split dp[i][k] + dp[k+1][j] + cost (Merge Stones, Strange Printer). The only ordering requirement is that every subproblem you read is strictly smaller and already computed -- by length, or by iterating i downward.",
       "trap": "Iterating i and j in the natural order instead of by interval LENGTH, so subproblems are not yet computed.",
       "problems": [
         "Burst Balloons",
@@ -155,7 +155,7 @@
       "name": "Knapsack family",
       "cue": "Choose items under a capacity/budget to optimize a value, or count ways to hit a target.",
       "invariant": "0/1 iterates capacity DESCENDING (each item once); unbounded iterates ASCENDING (reuse allowed).",
-      "trap": "The loop direction. Getting it backwards silently converts one problem into the other.",
+      "trap": "Two independent traps. DIRECTION: 0/1 iterates capacity descending, unbounded ascending -- backwards silently converts one problem into the other. ORDER: items-outer counts COMBINATIONS (Coin Change II), capacity-outer counts PERMUTATIONS (Combination Sum IV). Same array, same direction, different answer.",
       "problems": [
         "Partition Equal Subset Sum",
         "Coin Change II",
@@ -183,7 +183,7 @@
       "name": "Heap / top-k",
       "cue": "k-th largest, k closest, merge k sorted things, or a running median.",
       "invariant": "A size-k min-heap keeps the k largest in O(n log k) -- smaller and faster than sorting everything.",
-      "trap": "Using a max-heap of size n when a min-heap of size k suffices. For running median, two heaps with a size invariant.",
+      "trap": "Know the ladder before the follow-up arrives: heap is O(n log k), quickselect is O(n) average (O(n) worst with median-of-medians), and bucket sort is O(n) for Top K Frequent. Choose the heap deliberately -- streaming input, or you may not mutate the array. For running median, two heaps with a size invariant.",
       "problems": [
         "Kth Largest Element in an Array",
         "Merge k Sorted Lists",
@@ -199,10 +199,10 @@
       "invariant": "Path from root spells a prefix; shared prefixes cost nothing extra.",
       "trap": "Building a trie when a hashmap of full strings would do -- only worth it when PREFIXES are queried.",
       "problems": [
-        "Implement Trie",
+        "Implement Trie (Prefix Tree)",
         "Word Search II",
-        "Design Add and Search Words",
-        "Maximum XOR of Two Numbers",
+        "Design Add and Search Words Data Structure",
+        "Maximum XOR of Two Numbers in an Array",
         "Replace Words"
       ]
     },
@@ -223,7 +223,7 @@
       "id": "intervals",
       "name": "Interval merging / sweep line",
       "cue": "Overlapping ranges: merge, count max concurrent, insert, or find free gaps.",
-      "invariant": "Sort by start (or split into +1/-1 events and sort by time); a single pass then suffices.",
+      "invariant": "Sort by START to merge or to count max concurrency. Sort by END to select the maximum number of non-overlapping intervals (activity selection) -- Non-overlapping Intervals and Minimum Number of Arrows both need the end key, and sorting by start silently gives a wrong answer.",
       "trap": "Tie-breaking when an interval ends exactly where another starts. Decide whether touching counts as overlapping and encode it in the sort.",
       "problems": [
         "Merge Intervals",
@@ -244,20 +244,20 @@
         "Subsets",
         "Counting Bits",
         "Maximum Product of Word Lengths",
-        "Minimum Number of K Consecutive Bit Flips"
+        "Bitwise AND of Numbers Range"
       ]
     },
     {
       "id": "greedy-exchange",
       "name": "Greedy with an exchange argument",
       "cue": "Local choice looks optimal and you can argue any optimal solution can be transformed into the greedy one without getting worse.",
-      "invariant": "The exchange argument IS the proof. Without it, greedy is a guess.",
+      "invariant": "The exchange argument, concretely: assume an optimal solution that first differs from greedy at step i; swap greedy's choice in; show the result is still feasible and no worse; induct. If you cannot run that, greedy is a guess.",
       "trap": "Asserting greedy works because it passes the examples. Interviewers probe exactly here -- have the argument ready.",
       "problems": [
         "Jump Game II",
         "Gas Station",
         "Partition Labels",
-        "Minimum Number of Arrows",
+        "Minimum Number of Arrows to Burst Balloons",
         "Candy"
       ]
     },
@@ -268,7 +268,7 @@
       "invariant": "KMP's failure function is per-prefix: pi[i] = length of the longest proper prefix of pattern[0..i] that is also a suffix of pattern[0..i]. (The single longest border of the whole pattern is just pi[n-1].) Rolling hash gives O(1) substring compare with collision risk.",
       "trap": "Rolling hash with a weak modulus -- use a large prime and ideally double hashing. Interviewers will ask about collisions.",
       "problems": [
-        "Implement strStr",
+        "Find the Index of the First Occurrence in a String",
         "Repeated Substring Pattern",
         "Shortest Palindrome",
         "Longest Duplicate Substring"
