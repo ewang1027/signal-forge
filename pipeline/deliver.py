@@ -51,8 +51,25 @@ def render_idea(idea: dict, domain: str) -> str:
     evidence = "".join(
         f'<a href="{_esc(u)}">{_esc(u)}</a>' for u in idea.get("evidence_refs", [])
     )
+
+    closest = ""
+    if repo := idea.get("closest_existing"):
+        closest = (f' Closest existing: <a href="https://github.com/{_esc(repo)}">'
+                   f'{_esc(repo)}</a>.')
+
+    # The gate's objection is worth reading even when the idea survives -- it is
+    # usually the sharpest thing in the email, and hiding it would be dishonest
+    # about what the pipeline actually concluded.
+    reframe = ""
+    if note := idea.get("reframe"):
+        reframe = f'<h2>The gate pushed back</h2><div class="hard">{_esc(note)}</div>'
+
+    feas = ""
+    if f := idea.get("feasibility"):
+        feas = f' <span class="tag">scope: {_esc(f)}</span>'
+
     return f"""
-<span class="tag">{_esc(domain)}</span>
+<span class="tag">{_esc(domain)}</span>{feas}
 <h1>{_esc(idea.get('title'))}</h1>
 <p class="sub">{_esc(idea.get('one_liner'))}</p>
 
@@ -72,8 +89,8 @@ def render_idea(idea: dict, domain: str) -> str:
 <ol>{milestones}</ol>
 
 <h2>Prior art</h2>
-<p>{_esc(idea.get('prior_art'))}</p>
-
+<p>{_esc(idea.get('prior_art'))}{closest}</p>
+{reframe}
 <h2>Kill criteria</h2>
 <p>{_esc(idea.get('kill_criteria'))}</p>
 

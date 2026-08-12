@@ -14,7 +14,8 @@ import sqlite3
 import sys
 import time
 
-from .config import IDEAS_DIR, PROMPTS_DIR, ensure_state_dirs
+from . import gate, ledger, taste
+from .config import IDEAS_DIR, PROMPTS_DIR, REJECTS_DIR, ensure_state_dirs
 from .db import connect, get_kv, set_kv
 from .domains import ROTATION
 from .llm import complete_json
@@ -148,10 +149,18 @@ def slugify(title: str) -> str:
     return s[:60] or "idea"
 
 
-def generate(domain: str, rows: list[sqlite3.Row]) -> dict:
+def generate(domain: str, rows: list[sqlite3.Row]) -> list[dict]:
+    """Three candidates in one call. Cheaper than three calls, and the model can
+    see all three at once and push them apart."""
     template = (PROMPTS_DIR / "ideate.md").read_text()
-    prompt = template.replace("{domain}", domain).replace("{evidence}", format_evidence(rows))
-    return complete_json(prompt)
+    prompt = (template
+              .replace("{domain}", domain)
+              .replace("{evidence}", format_evidence(rows))
+              .replace("{taste}", taste.load()))
+
+    result = complete_json(prompt)
+    candidates = result if isinstance(result, list) else [result]
+    return [c for c in candidates if isinstance(c, dict)]
 
 
 def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_key: str | None) -> str:
@@ -176,6 +185,25 @@ def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_key: str | Non
     return slug
 
 
+def save_reject(candidate: dict, verdicts: list, domain: str) -> None:
+    ensure_state_dirs()
+    now = int(time.time())
+    slug = slugify(candidate.get("title", ""))
+    payload = {
+        "domain": domain,
+        "rejected_utc": now,
+        "verdicts": [{"stage": v.stage, "ok": v.ok, "reason": v.reason} for v in verdicts],
+        "candidate": candidate,
+    }
+    (REJECTS_DIR / f"{now}-{slug}.json").write_text(json.dumps(payload, indent=2))
+
+
+def _embedder():
+    """Deferred so `--help` and the daily prep run never import torch."""
+    from .themes import embed
+    return embed
+
+
 def main() -> int:
     with connect() as conn:
         domain = peek_domain(conn)
@@ -191,14 +219,50 @@ def main() -> int:
 
         print(f"{domain}: {provenance}")
         print(f"{domain}: {len(rows)} pieces of evidence")
-        idea = generate(domain, rows)
-        idea["evidence_refs"] = validate_refs(idea, rows)
-        slug = save(conn, idea, domain, theme_key)
+
+        embed_fn = _embedder()
+        added = ledger.sync(conn, embed_fn)
+        if added:
+            print(f"ledger: embedded {added} past idea(s)")
+
+        candidates = generate(domain, rows)
+        print(f"generated {len(candidates)} candidates\n")
+
+        survivor = None
+        for i, candidate in enumerate(candidates, 1):
+            title = candidate.get("title", "(untitled)")
+            print(f"[{i}] {title[:70]}")
+
+            try:
+                candidate["evidence_refs"] = validate_refs(candidate, rows)
+            except UngroundedIdea as exc:
+                print(f"    [REJECT] grounding: {exc}")
+                continue
+
+            ok, revised, verdicts = gate.run(conn, candidate, embed_fn)
+            for v in verdicts:
+                print(f"    {v}")
+            if ok:
+                survivor = revised
+                break
+            # Keep rejects. They are the only way to tell whether the gates are
+            # calibrated or just strict, and they cost nothing to store.
+            save_reject(candidate, verdicts, domain)
+
+        if survivor is None:
+            # Every candidate failed. Do NOT ship the least-bad one -- the gates
+            # exist precisely to make "nothing" an acceptable outcome.
+            print("\nall candidates rejected; nothing to ship")
+            advance_domain(conn)
+            return 0
+
+        slug = save(conn, survivor, domain, theme_key)
+        ledger.sync(conn, embed_fn)  # the shipped idea joins the dedup ledger
         advance_domain(conn)
 
-    print(f"\n{idea.get('title')}")
-    print(f"  {idea.get('one_liner')}")
-    print(f"\nhard part: {idea.get('why_hard')}")
+    print(f"\n{survivor.get('title')}")
+    print(f"  {survivor.get('one_liner')}")
+    print(f"\nhard part: {survivor.get('why_hard')}")
     print(f"saved as {slug}")
     return 0
 

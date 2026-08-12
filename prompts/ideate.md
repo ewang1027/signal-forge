@@ -9,11 +9,19 @@ Below is raw evidence: real complaints harvested from Hacker News, in the domain
 {evidence}
 </evidence>
 
+## What has landed well before
+
+{taste}
+
 ## What to do
 
 Read the evidence and find the *underlying* problem — the thing that keeps
 recurring across several of these complaints, not a restatement of any single
-one. Then propose ONE project that attacks it.
+one. Then propose THREE projects that attack it.
+
+The three must differ in *kind*, not in detail — three framings of the same
+build are useless. Aim at different layers or different parts of the problem, so
+that rejecting one does not reject all three.
 
 ## Hard constraints
 
@@ -38,7 +46,8 @@ Do not pad. No "this could be extended to..." sections.
 
 ## Output
 
-Emit exactly one JSON object inside a ```json fence, no prose outside it:
+Emit a JSON array of exactly three objects inside a ```json fence, no prose
+outside it. Order them best-first. Each object:
 
 {{
   "title": "short, concrete, names the thing being built",

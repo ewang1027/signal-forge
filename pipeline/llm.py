@@ -20,7 +20,7 @@ import time
 
 from .config import MODEL
 
-_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_FENCE = re.compile(r"```(?:json)?\s*([\[{].*?[\]}])\s*```", re.DOTALL)
 
 
 class LLMError(RuntimeError):
@@ -58,25 +58,28 @@ def complete(prompt: str, *, timeout: int = 600) -> str:
     return proc.stdout.strip()
 
 
-def _parse_json(raw: str) -> dict:
+def _parse_json(raw: str) -> dict | list:
     match = _FENCE.search(raw)
     candidate = match.group(1) if match else raw
 
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        # Fall back to the outermost brace pair -- models sometimes emit a
-        # sentence before the fence despite instructions.
-        start, end = candidate.find("{"), candidate.rfind("}")
-        if start == -1 or end <= start:
-            raise LLMError(f"no JSON object in response: {raw[:300]}") from None
-        try:
-            return json.loads(candidate[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"unparseable JSON: {exc}: {raw[:300]}") from exc
+        pass
+
+    # Models sometimes emit a sentence before the fence despite instructions.
+    # Try the outermost array first, then the outermost object.
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start, end = candidate.find(opener), candidate.rfind(closer)
+        if start != -1 and end > start:
+            try:
+                return json.loads(candidate[start : end + 1])
+            except json.JSONDecodeError:
+                continue
+    raise LLMError(f"no parseable JSON in response: {raw[:300]}")
 
 
-def complete_json(prompt: str, *, timeout: int = 600, attempts: int = 3) -> dict:
+def complete_json(prompt: str, *, timeout: int = 600, attempts: int = 3) -> dict | list:
     """Run a turn and parse the single JSON object out of the response.
 
     Retries because this runs unattended twice a week: a transient subprocess or

@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = Path(os.environ.get("STATE_DIR", REPO_ROOT.parent / "signal-forge-state"))
 DB_PATH = STATE_DIR / "signal.db"
 IDEAS_DIR = STATE_DIR / "ideas"
+REJECTS_DIR = STATE_DIR / "rejects"
 DECKS_DIR = STATE_DIR / "decks"
 TASTE_PATH = STATE_DIR / "TASTE.md"
 
@@ -51,5 +52,5 @@ def ensure_state_dirs() -> None:
             "Clone signal-forge-state next to this repo, or set STATE_DIR. "
             "Refusing to create it -- that would silently start an empty corpus."
         )
-    for d in (IDEAS_DIR, DECKS_DIR):
+    for d in (IDEAS_DIR, DECKS_DIR, REJECTS_DIR):
         d.mkdir(parents=True, exist_ok=True)

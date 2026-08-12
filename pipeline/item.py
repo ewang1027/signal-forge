@@ -20,6 +20,13 @@ MIN_CHARS = 220      # below this it is a quip, not a report
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\n{3,}")
 
+# Harvested text is interpolated into prompts inside <evidence> tags. Anyone on
+# HN can write a closing tag followed by instructions, so the delimiters are
+# stripped from the text itself. Cheap now; load-bearing once the prior-art gate
+# can search and the feedback loop parses inbound mail.
+_DELIM_RE = re.compile(r"</?\s*(evidence|instructions?|system|assistant|human)\s*>",
+                       re.IGNORECASE)
+
 
 @dataclass
 class Item:
@@ -40,7 +47,10 @@ class Item:
 def clean_html(raw: str) -> str:
     text = raw.replace("<p>", "\n\n").replace("</p>", "\n")
     text = _TAG_RE.sub("", text)
-    return _WS_RE.sub("\n\n", html.unescape(text)).strip()
+    text = html.unescape(text)
+    # after unescaping, since &lt;/evidence&gt; survives tag-stripping
+    text = _DELIM_RE.sub("", text)
+    return _WS_RE.sub("\n\n", text).strip()
 
 
 def gate(item: Item, *, require_pain: bool = True) -> Item | None:

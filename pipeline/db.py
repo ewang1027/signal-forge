@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS theme_member (
 );
 
 
+-- Embeddings of every idea ever generated, for the dedup gate. Keyed by a
+-- stable content hash so it can be rebuilt from ideas/*.json, which is the
+-- real ledger -- this table is only a cache.
+CREATE TABLE IF NOT EXISTS idea_vec (
+    text_hash TEXT PRIMARY KEY,
+    title     TEXT,
+    vec       BLOB NOT NULL
+);
+
 -- Rotation cursor, last-run timestamps, misc counters.
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
