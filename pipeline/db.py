@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS theme_member (
 );
 
 
+-- FSRS review state, one row per card. The card *content* lives in cards/*.json
+-- in the public repo (it is authored curriculum, not personal); this table is
+-- the record of what Ethan keeps getting wrong, which is not.
+CREATE TABLE IF NOT EXISTS review (
+    deck     TEXT NOT NULL,
+    card_id  TEXT NOT NULL,
+    state    TEXT NOT NULL,          -- serialized fsrs.Card
+    due_utc  INTEGER NOT NULL,
+    reps     INTEGER DEFAULT 0,
+    lapses   INTEGER DEFAULT 0,      -- weak-area signal; drives what resurfaces
+    last_utc INTEGER,
+    PRIMARY KEY (deck, card_id)
+);
+
 -- Which harvested rows an idea was actually built from.
 --
 -- This, not the theme key, is what prevents repeats. A theme's identity is
@@ -149,6 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_theme_evidence  ON theme(evidence DESC);
 CREATE INDEX IF NOT EXISTS idx_theme_key        ON theme(key);
 CREATE INDEX IF NOT EXISTS idx_theme_member_sig ON theme_member(signal_id);
 CREATE INDEX IF NOT EXISTS idx_idea_signal_sig  ON idea_signal(signal_id);
+CREATE INDEX IF NOT EXISTS idx_review_due        ON review(due_utc);
 """
 
 

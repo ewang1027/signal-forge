@@ -1,0 +1,182 @@
+{
+  "deck": "dsa",
+  "note": "Cards are PATTERNS, not problems. Scheduling individual problems trains recall of those problems; scheduling the recognition cue generalizes. `cue` is the highest-value field -- in an interview you need to know what to reach for within 60 seconds, not to have memorized a solution.",
+  "cards": [
+    {
+      "id": "two-pointers",
+      "name": "Two pointers",
+      "cue": "Sorted array (or sortable) and you need a pair/triple meeting a condition. Also: comparing from both ends, or partitioning in place.",
+      "invariant": "Every step provably eliminates one candidate from consideration, so O(n) replaces O(n^2).",
+      "trap": "Reaching for it on unsorted input where sorting destroys required index order. Return indices before sorting, or use a hashmap instead.",
+      "problems": ["3Sum", "Container With Most Water", "Trapping Rain Water", "Sort Colors", "Remove Duplicates from Sorted Array II"]
+    },
+    {
+      "id": "sliding-window",
+      "name": "Sliding window",
+      "cue": "Contiguous subarray/substring, and asking for longest/shortest/count satisfying a constraint that is monotonic as the window grows.",
+      "invariant": "The window only ever moves right; each element enters and leaves once, so O(n).",
+      "trap": "Applying it when the constraint is not monotonic (e.g. 'subarray sum equals k' with negative numbers -- shrinking may re-satisfy it). Use prefix sums there.",
+      "problems": ["Longest Substring Without Repeating Characters", "Minimum Window Substring", "Longest Repeating Character Replacement", "Subarrays with K Different Integers"]
+    },
+    {
+      "id": "monotonic-stack",
+      "name": "Monotonic stack",
+      "cue": "'Next greater / previous smaller' for every element, or a histogram-shaped problem.",
+      "invariant": "The stack holds indices whose answer is still unresolved, in monotone order. An element is popped exactly when its answer is found.",
+      "trap": "Storing values instead of indices when the answer needs a distance. Also forgetting to drain the stack at the end.",
+      "problems": ["Daily Temperatures", "Largest Rectangle in Histogram", "Sum of Subarray Minimums", "Remove K Digits"]
+    },
+    {
+      "id": "binary-search-on-answer",
+      "name": "Binary search on the answer",
+      "cue": "Asking to minimize a maximum (or maximize a minimum), and you can cheaply CHECK whether a candidate answer is feasible.",
+      "invariant": "feasible(x) is monotone in x, so the answer space is sorted even when the input is not.",
+      "trap": "Not proving monotonicity of the predicate first -- this is the whole technique, and it fails silently if the predicate is not monotone.",
+      "problems": ["Koko Eating Bananas", "Split Array Largest Sum", "Capacity To Ship Packages Within D Days", "Minimize Max Distance to Gas Station"]
+    },
+    {
+      "id": "prefix-sum-hashmap",
+      "name": "Prefix sum + hashmap",
+      "cue": "Count or find subarrays summing to k, especially with negatives (where sliding window fails).",
+      "invariant": "sum(i..j) == prefix[j] - prefix[i-1]; store counts of seen prefixes to find complements in O(1).",
+      "trap": "Forgetting to seed the map with {0: 1} for subarrays starting at index 0.",
+      "problems": ["Subarray Sum Equals K", "Contiguous Array", "Continuous Subarray Sum", "Count Number of Nice Subarrays"]
+    },
+    {
+      "id": "union-find",
+      "name": "Union-Find (DSU)",
+      "cue": "Dynamic connectivity, grouping, or 'are these two in the same component' with edges arriving over time.",
+      "invariant": "Path compression + union by rank gives near-O(1) amortized (inverse Ackermann).",
+      "trap": "Using it when you need to REMOVE edges -- DSU is add-only. Process offline in reverse if the problem deletes.",
+      "problems": ["Number of Provinces", "Redundant Connection", "Accounts Merge", "Number of Islands II", "Swim in Rising Water"]
+    },
+    {
+      "id": "topological-sort",
+      "name": "Topological sort",
+      "cue": "Dependencies, ordering, prerequisites, or detecting a cycle in a directed graph.",
+      "invariant": "Kahn's: repeatedly emit a node with in-degree 0. If fewer than n emitted, a cycle exists.",
+      "trap": "Using DFS-based toposort and forgetting the three-color state -- 'visited' alone cannot distinguish a back edge from a cross edge.",
+      "problems": ["Course Schedule II", "Alien Dictionary", "Minimum Height Trees", "Parallel Courses III"]
+    },
+    {
+      "id": "dijkstra",
+      "name": "Dijkstra / weighted shortest path",
+      "cue": "Shortest path with non-negative weights. Also: 'minimize the maximum edge' variants with a modified relaxation.",
+      "invariant": "Once popped from the heap, a node's distance is final -- which is exactly what negative weights break.",
+      "trap": "Negative edges (use Bellman-Ford). Also: not skipping stale heap entries, which turns it quadratic.",
+      "problems": ["Network Delay Time", "Path With Minimum Effort", "Cheapest Flights Within K Stops", "Swim in Rising Water"]
+    },
+    {
+      "id": "bfs-shortest-unweighted",
+      "name": "BFS on implicit graphs",
+      "cue": "Shortest number of steps where each move costs 1, and states are generated rather than stored (word ladders, board states, lock combinations).",
+      "invariant": "BFS visits states in nondecreasing distance, so the first time you reach a state is optimal.",
+      "trap": "Marking visited on dequeue rather than enqueue -- this admits duplicates and can blow up exponentially.",
+      "problems": ["Word Ladder", "Open the Lock", "Minimum Genetic Mutation", "Shortest Path in Binary Matrix", "Sliding Puzzle"]
+    },
+    {
+      "id": "dp-subsequence",
+      "name": "DP over subsequences",
+      "cue": "Two sequences and an edit/match/align question, or one sequence with 'pick a subset in order'.",
+      "invariant": "dp[i][j] answers the prefix pair (i, j); the recurrence branches on whether the current elements are used.",
+      "trap": "Getting the base row/column wrong. Write out the n=0 and n=1 cases explicitly before coding.",
+      "problems": ["Longest Common Subsequence", "Edit Distance", "Longest Increasing Subsequence", "Distinct Subsequences", "Interleaving String"]
+    },
+    {
+      "id": "dp-intervals",
+      "name": "Interval DP",
+      "cue": "Answer for a range depends on splitting it at some k -- merging stones, bursting balloons, matrix chains.",
+      "invariant": "dp[i][j] = best over k in (i,j) of dp[i][k] + dp[k][j] + cost. Iterate by increasing length.",
+      "trap": "Iterating i and j in the natural order instead of by interval LENGTH, so subproblems are not yet computed.",
+      "problems": ["Burst Balloons", "Minimum Cost to Merge Stones", "Strange Printer", "Longest Palindromic Subsequence"]
+    },
+    {
+      "id": "dp-knapsack",
+      "name": "Knapsack family",
+      "cue": "Choose items under a capacity/budget to optimize a value, or count ways to hit a target.",
+      "invariant": "0/1 iterates capacity DESCENDING (each item once); unbounded iterates ASCENDING (reuse allowed).",
+      "trap": "The loop direction. Getting it backwards silently converts one problem into the other.",
+      "problems": ["Partition Equal Subset Sum", "Coin Change II", "Target Sum", "Ones and Zeroes", "Last Stone Weight II"]
+    },
+    {
+      "id": "backtracking-pruning",
+      "name": "Backtracking with pruning",
+      "cue": "Enumerate all valid configurations; the search space is exponential but constraints cut it hard.",
+      "invariant": "Undo state on the way out; prune the moment a partial solution cannot be completed.",
+      "trap": "Duplicate results from unsorted input with repeats. Sort first, then skip i > start && a[i] == a[i-1].",
+      "problems": ["Subsets II", "Combination Sum II", "N-Queens", "Palindrome Partitioning", "Word Search II"]
+    },
+    {
+      "id": "heap-topk",
+      "name": "Heap / top-k",
+      "cue": "k-th largest, k closest, merge k sorted things, or a running median.",
+      "invariant": "A size-k min-heap keeps the k largest in O(n log k) -- smaller and faster than sorting everything.",
+      "trap": "Using a max-heap of size n when a min-heap of size k suffices. For running median, two heaps with a size invariant.",
+      "problems": ["Kth Largest Element in an Array", "Merge k Sorted Lists", "Find Median from Data Stream", "Top K Frequent Elements", "Task Scheduler"]
+    },
+    {
+      "id": "trie",
+      "name": "Trie",
+      "cue": "Prefix queries, autocomplete, or matching many patterns against one text.",
+      "invariant": "Path from root spells a prefix; shared prefixes cost nothing extra.",
+      "trap": "Building a trie when a hashmap of full strings would do -- only worth it when PREFIXES are queried.",
+      "problems": ["Implement Trie", "Word Search II", "Design Add and Search Words", "Maximum XOR of Two Numbers", "Replace Words"]
+    },
+    {
+      "id": "fast-slow-pointers",
+      "name": "Fast/slow pointers",
+      "cue": "Cycle detection, finding a midpoint, or the k-th from the end in one pass with O(1) space.",
+      "invariant": "Floyd: if a cycle exists the pointers meet; restarting one at head and stepping both by 1 finds the entry.",
+      "trap": "Off-by-one on the midpoint -- decide up front whether you want the first or second middle for even length.",
+      "problems": ["Linked List Cycle II", "Find the Duplicate Number", "Reorder List", "Palindrome Linked List"]
+    },
+    {
+      "id": "intervals",
+      "name": "Interval merging / sweep line",
+      "cue": "Overlapping ranges: merge, count max concurrent, insert, or find free gaps.",
+      "invariant": "Sort by start (or split into +1/-1 events and sort by time); a single pass then suffices.",
+      "trap": "Tie-breaking when an interval ends exactly where another starts. Decide whether touching counts as overlapping and encode it in the sort.",
+      "problems": ["Merge Intervals", "Insert Interval", "Meeting Rooms II", "Non-overlapping Intervals", "My Calendar III"]
+    },
+    {
+      "id": "bit-manipulation",
+      "name": "Bit manipulation",
+      "cue": "Small fixed universe (<= 20-ish elements) for subset enumeration, XOR tricks, or counting set bits.",
+      "invariant": "x & (x-1) clears the lowest set bit; XOR is its own inverse and cancels pairs.",
+      "trap": "Signed shifts and overflow in languages without arbitrary precision. In Python, watch for unbounded ints in mask loops.",
+      "problems": ["Single Number III", "Subsets", "Counting Bits", "Maximum Product of Word Lengths", "Minimum Number of K Consecutive Bit Flips"]
+    },
+    {
+      "id": "greedy-exchange",
+      "name": "Greedy with an exchange argument",
+      "cue": "Local choice looks optimal and you can argue any optimal solution can be transformed into the greedy one without getting worse.",
+      "invariant": "The exchange argument IS the proof. Without it, greedy is a guess.",
+      "trap": "Asserting greedy works because it passes the examples. Interviewers probe exactly here -- have the argument ready.",
+      "problems": ["Jump Game II", "Gas Station", "Partition Labels", "Minimum Number of Arrows", "Candy"]
+    },
+    {
+      "id": "string-matching",
+      "name": "String matching (KMP / rolling hash)",
+      "cue": "Substring search, periodicity, or comparing many substrings in O(1).",
+      "invariant": "KMP's failure function = longest proper prefix that is also a suffix. Rolling hash gives O(1) substring compare with collision risk.",
+      "trap": "Rolling hash with a weak modulus -- use a large prime and ideally double hashing. Interviewers will ask about collisions.",
+      "problems": ["Implement strStr", "Repeated Substring Pattern", "Shortest Palindrome", "Longest Duplicate Substring"]
+    },
+    {
+      "id": "segment-tree-bit",
+      "name": "Segment tree / Fenwick",
+      "cue": "Range queries WITH point or range updates interleaved. Prefix sums alone fail once updates appear.",
+      "invariant": "O(log n) per query and update; Fenwick is smaller/faster but only for invertible operations.",
+      "trap": "Reaching for it when the array is static -- prefix sums are simpler and faster. Only justified when updates interleave.",
+      "problems": ["Range Sum Query - Mutable", "Count of Smaller Numbers After Self", "Reverse Pairs", "My Calendar II"]
+    },
+    {
+      "id": "matrix-traversal",
+      "name": "Grid traversal / flood fill",
+      "cue": "2D grid with regions, islands, or distance-from-multiple-sources.",
+      "invariant": "Multi-source BFS: push all sources at distance 0, then a single BFS gives distance-to-nearest for every cell.",
+      "trap": "Running BFS once per source (quadratic) when multi-source in one pass is linear.",
+      "problems": ["Number of Islands", "Rotting Oranges", "01 Matrix", "Pacific Atlantic Water Flow", "Surrounded Regions"]
+    }
+  ]
+}

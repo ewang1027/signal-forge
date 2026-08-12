@@ -54,8 +54,12 @@ else
   # Anthropic tokens are base64url, so the character class MUST include _ and .
   # An earlier version used [a-z0-9-] and therefore let CLAUDE_CODE_OAUTH_TOKEN
   # straight through -- the one credential this whole system exists to protect.
+  # \b before each prefix is load-bearing: without it `re_[A-Za-z0-9_-]{16,}`
+  # matches inside ordinary identifiers -- `test_failu(re_collapses_the_...)`
+  # tripped it. The hook failed closed, which is the right direction, but a
+  # guard that blocks legitimate commits is what teaches people --no-verify.
   leaked=$(git diff --cached -U0 | grep -iE \
-    '^\+.*(sk-ant-[A-Za-z0-9_.-]{20,}|re_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' || true)
+    '^\+.*(\bsk-ant-[A-Za-z0-9_.-]{20,}|\bre_[A-Za-z0-9]{8,}_[A-Za-z0-9]{16,}|\bgh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' || true)
   if [ -n "$leaked" ]; then
     echo "BLOCKED: looks like a credential is staged." >&2
     fail=1

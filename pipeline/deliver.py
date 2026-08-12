@@ -17,6 +17,7 @@ from pathlib import Path
 
 import httpx
 
+from . import prep
 from .config import DIGEST_FROM, DIGEST_TO, NTFY_TOPIC, RESEND_API_KEY, USER_AGENT
 from .db import connect
 
@@ -100,9 +101,52 @@ def render_idea(idea: dict, domain: str) -> str:
 """
 
 
+def render_prep(day: dict) -> str:
+    """The daily prep block. On idea days this sits below the fold."""
+    if not day:
+        return ""
+
+    def card_list(cards: list[dict], key: str) -> str:
+        out = []
+        for c in cards:
+            detail = _esc(c.get(key, ""))
+            extra = ""
+            if trap := c.get("trap"):
+                extra = f'<div class="hard">trap: {_esc(trap)}</div>'
+            out.append(f"<li><b>{_esc(c.get('name'))}</b><br>{detail}{extra}</li>")
+        return "".join(out)
+
+    blocks = []
+
+    if p := day.get("problem"):
+        blocks.append(
+            f'<h2>Timed problem — 25 min</h2>'
+            f'<p><b>{_esc(p["problem"])}</b><br>'
+            f'<span class="tag">{_esc(p["pattern"])}</span></p>'
+            f'<div class="hard">recognition cue: {_esc(p["cue"])}</div>'
+        )
+
+    if d := day.get("design_prompt"):
+        covers = "".join(f"<li>{_esc(m)}</li>" for m in d.get("must_cover", []))
+        blocks.append(
+            f'<h2>Timed design — 20 min, out loud</h2>'
+            f'<p><b>{_esc(d["prompt"])}</b></p>'
+            f'<p>Answer first. Then check you covered:</p><ol>{covers}</ol>'
+            f'<div class="hard">what sinks candidates: {_esc(d.get("trap"))}</div>'
+        )
+
+    if cards := day.get("dsa"):
+        blocks.append(f"<h2>Patterns due</h2><ul>{card_list(cards, 'cue')}</ul>")
+
+    if cards := day.get("system_design"):
+        blocks.append(f"<h2>Design concepts due</h2><ul>{card_list(cards, 'prompt')}</ul>")
+
+    return "".join(blocks)
+
+
 def render(idea: dict | None, domain: str, prep: str = "") -> str:
     body = render_idea(idea, domain) if idea else "<h1>Today's prep</h1>"
-    prep_block = f"<h2>Prep</h2>{prep}" if prep else ""
+    prep_block = prep or ""
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -159,17 +203,28 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
                     help="render to build/digest.html instead of sending")
+    ap.add_argument("--prep-only", action="store_true",
+                    help="skip the idea even if one is waiting")
     args = ap.parse_args()
 
     with connect() as conn:
-        row = next_unsent(conn)
-        if row is None:
+        # Prep goes out every day; an idea only on the days one is waiting.
+        # Ordering matters: prep must not depend on there being an idea, so a
+        # failed ideation run never costs a prep day.
+        day = prep.today(conn)
+        prep_html = render_prep(day)
+
+        row = next_unsent(conn) if not args.prep_only else None
+        idea = json.loads(row["body"]) if row else None
+        domain = row["domain"] if row else ""
+
+        if idea is None and not prep_html:
             print("nothing to send")
             return 0
 
-        idea = json.loads(row["body"])
-        body_html = render(idea, row["domain"] or "")
-        subject = idea.get("title", "signal-forge")
+        body_html = render(idea, domain or "", prep_html)
+        subject = (idea.get("title") if idea
+                   else f"prep — {len(day['dsa']) + len(day['system_design'])} due")
 
         if args.dry_run:
             out = Path("build/digest.html")
@@ -183,13 +238,16 @@ def main() -> int:
         # outage raises, the commit never happens, and the next run sends the
         # same email again.
         send_email(subject, body_html)
-        conn.execute("UPDATE idea SET sent_utc = ? WHERE id = ?",
-                     (int(time.time()), row["id"]))
+        if row is not None:
+            conn.execute("UPDATE idea SET sent_utc = ? WHERE id = ?",
+                         (int(time.time()), row["id"]))
         conn.commit()
 
         # Push is explicitly a nudge; it must never be able to undo the send.
+        nudge = (f"{subject} — {idea.get('one_liner', '')[:120]}" if idea
+                 else f"{subject}. {(day.get('problem') or {}).get('problem', '')}")
         try:
-            send_push(f"{subject} — {idea.get('one_liner', '')[:120]}")
+            send_push(nudge)
         except Exception as exc:
             print(f"  push failed ({exc}), email already sent", file=sys.stderr)
 

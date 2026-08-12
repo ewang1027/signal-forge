@@ -1,0 +1,240 @@
+{
+  "deck": "system_design",
+  "note": "Weighted toward what 2026 interviews actually probe -- cost reasoning, failure recovery, operational maturity -- rather than raw scalability. `trap` is the specific omission that sinks candidates: naming a technology without naming the decision it forces.",
+  "cards": [
+    {
+      "id": "cache-eviction",
+      "name": "Caching and eviction",
+      "prompt": "You propose Redis in front of the database. What must you specify before that is a real answer?",
+      "must_cover": [
+        "eviction policy (LRU / LFU / TTL) and WHY that one for this access pattern",
+        "what happens on a miss -- thundering herd, and single-flight or request coalescing",
+        "invalidation: write-through vs write-behind vs TTL-only, and the staleness you accept",
+        "memory sizing and what gets evicted first when it fills",
+        "cold-start behavior after a restart or failover"
+      ],
+      "trap": "Saying 'add Redis' and stopping. The interviewer is waiting for eviction policy and invalidation; without them you have proposed an unbounded memory leak with a stale-data bug."
+    },
+    {
+      "id": "kafka-ordering",
+      "name": "Log/queue ordering and delivery",
+      "prompt": "You put Kafka between two services. What ordering and delivery guarantees have you actually bought?",
+      "must_cover": [
+        "ordering is per-partition only -- so the partition key IS the ordering decision",
+        "at-least-once by default; exactly-once needs idempotent producers plus transactions, and costs throughput",
+        "consumer rebalance: in-flight messages, partition reassignment, duplicate delivery",
+        "consumer lag as the health metric, and what you do when it grows",
+        "retention: what happens when a consumer is down longer than the retention window"
+      ],
+      "trap": "Claiming 'Kafka gives ordering' with no partition-key discussion. Global ordering across partitions does not exist, and choosing a key with skew silently creates a hot partition."
+    },
+    {
+      "id": "sharding-rebalance",
+      "name": "Sharding and rebalancing",
+      "prompt": "You shard the database. How do you add shard N+1 two years later?",
+      "must_cover": [
+        "shard key choice and the queries it makes expensive (cross-shard joins, fan-out reads)",
+        "consistent hashing / virtual nodes vs modulo -- modulo remaps everything on resize",
+        "the migration itself: dual-write, backfill, verify, cut over, with rollback at each step",
+        "hot shards from skewed keys, and what you do about a celebrity tenant",
+        "transactions that span shards, and whether you avoid them or run 2PC"
+      ],
+      "trap": "Sharding by modulo and never discussing resize. 'We'll shard by user_id % N' is fine until N changes and every key moves."
+    },
+    {
+      "id": "consistency-models",
+      "name": "Consistency models",
+      "prompt": "Where in your design is eventual consistency acceptable, and where is it a bug?",
+      "must_cover": [
+        "name the model: linearizable, sequential, causal, read-your-writes, eventual",
+        "the concrete anomaly each one permits, in product terms",
+        "read-your-writes for the user's own edits -- usually non-negotiable",
+        "cost: linearizability requires coordination, which costs latency and availability under partition",
+        "where you deliberately accept staleness and how the UI hides it"
+      ],
+      "trap": "Saying 'eventually consistent' as if it were a single guarantee. The follow-up is always 'what can a user actually observe', and that requires naming the anomaly."
+    },
+    {
+      "id": "idempotency",
+      "name": "Idempotency and retries",
+      "prompt": "A payment request times out. The client retries. What stops a double charge?",
+      "must_cover": [
+        "idempotency key supplied by the client, stored with the result",
+        "how long you retain keys, and what a replay after expiry does",
+        "the write must be atomic with recording the key -- otherwise the crash window reintroduces the bug",
+        "distinguishing retry from a genuine second request",
+        "retry policy: exponential backoff with jitter, and a budget so retries cannot amplify an outage"
+      ],
+      "trap": "Retries without idempotency keys. Also: retry storms -- naive retry turns a partial outage into a total one."
+    },
+    {
+      "id": "observability-cost",
+      "name": "Observability cost",
+      "prompt": "Your observability bill is now 15% of infrastructure spend and growing 40% a year. What is driving it and what do you cut?",
+      "must_cover": [
+        "cardinality is typically 50-70% of the bill -- a single unbounded label (user_id, request_id) explodes a metric",
+        "the three signals have different cost profiles: metrics cheap, logs expensive, traces expensive but samplable",
+        "head vs tail sampling, and why tail sampling costs more but keeps the interesting traces",
+        "retention tiering: hot for days, cold/archived for compliance",
+        "what you lose with each cut, stated honestly"
+      ],
+      "trap": "Proposing 'more dashboards' as the answer to an incident. In 2026 the interviewer is probing whether you understand that observability has a budget."
+    },
+    {
+      "id": "failure-blast-radius",
+      "name": "Failure domains and blast radius",
+      "prompt": "A dependency you call on every request starts returning 500s. Walk through what happens.",
+      "must_cover": [
+        "timeouts on every network call, and a budget that shrinks down the call chain",
+        "circuit breaker: thresholds, half-open probing, what the fallback returns",
+        "bulkheads -- separate pools so one slow dependency cannot exhaust all threads/connections",
+        "graceful degradation: which features turn off first and who decided that",
+        "cascading failure: retries plus no backoff turns a blip into an outage"
+      ],
+      "trap": "Assuming dependencies fail cleanly and fast. The dangerous case is slow, not down -- a dependency at p99=30s exhausts your connection pool while every health check stays green."
+    },
+    {
+      "id": "rate-limiting",
+      "name": "Rate limiting",
+      "prompt": "Design rate limiting for a public API. What algorithm and where does the state live?",
+      "must_cover": [
+        "token bucket vs leaky bucket vs sliding window log vs sliding window counter, and the tradeoff",
+        "distributed state: per-node approximation vs a shared store, and the latency that adds",
+        "what the client sees -- 429 with Retry-After, and headers describing remaining quota",
+        "limiting dimension: per-user, per-IP, per-endpoint, per-tenant",
+        "fail-open vs fail-closed when the limiter store is unreachable"
+      ],
+      "trap": "Fixed windows allow 2x burst at the boundary. Also: not answering what happens when the rate-limit store itself is down."
+    },
+    {
+      "id": "replication-failover",
+      "name": "Replication and failover",
+      "prompt": "Your primary database fails. Describe the next 60 seconds.",
+      "must_cover": [
+        "sync vs async replication, and the data loss window (RPO) each implies",
+        "how failover is triggered -- automatic with a quorum, or human",
+        "split brain, and the fencing that prevents two primaries accepting writes",
+        "replica lag: reads served from a lagging replica after failover",
+        "RTO vs RPO stated as numbers, not adjectives"
+      ],
+      "trap": "Automatic failover without fencing. Two primaries is worse than being down, and the interviewer will ask about it."
+    },
+    {
+      "id": "schema-migration",
+      "name": "Zero-downtime schema change",
+      "prompt": "Rename a column on a 500M-row table with no downtime.",
+      "must_cover": [
+        "expand-migrate-contract: add new, dual-write, backfill in batches, read from new, drop old",
+        "each step deployable and reversible independently",
+        "backfill throttling so it does not saturate IO or replication",
+        "locking behavior of the specific DDL on the specific engine -- some ALTERs rewrite the whole table",
+        "the deploy is now multiple releases, and old and new code run simultaneously"
+      ],
+      "trap": "Treating the migration as one step. Also: forgetting that during the rollout, old and new application code both run against the same schema."
+    },
+    {
+      "id": "backpressure",
+      "name": "Backpressure and load shedding",
+      "prompt": "Traffic is 5x your capacity. What does the system do?",
+      "must_cover": [
+        "shed early and cheaply -- at the edge, before expensive work",
+        "priority: which requests are dropped first, and who decided",
+        "queue depth as the signal, and why unbounded queues are a latency bomb",
+        "propagating backpressure upstream rather than buffering silently",
+        "admission control vs autoscaling, and why autoscaling is too slow for a spike"
+      ],
+      "trap": "Assuming autoscaling absorbs it. Scale-up takes minutes; the spike is now. Unbounded queues 'accept' everything and then time out anyway, having done all the work."
+    },
+    {
+      "id": "cost-reasoning",
+      "name": "Cost reasoning",
+      "prompt": "Your design works. What does it cost per month, and what is the biggest line item?",
+      "must_cover": [
+        "estimate the dominant cost: usually egress, storage growth, or always-on compute",
+        "cross-AZ and egress traffic -- frequently the surprise line item",
+        "storage growth rate and retention policy, because storage only accumulates",
+        "reserved/spot vs on-demand, and the availability tradeoff",
+        "cost per unit of business value (per user, per request), not just total"
+      ],
+      "trap": "Not costing the design at all. In 2026 'it scales' without 'and here is what it costs' is an incomplete answer, and cross-AZ traffic is the most common blind spot."
+    },
+    {
+      "id": "search-index",
+      "name": "Search and inverted indexes",
+      "prompt": "Add full-text search over 100M documents.",
+      "must_cover": [
+        "inverted index structure; why LIKE '%x%' cannot work at this size",
+        "indexing pipeline: near-real-time vs batch, and the visibility lag users see",
+        "relevance scoring (BM25) and that ranking quality is the actual product",
+        "sharding the index and scatter-gather query cost",
+        "reindexing without downtime when the analyzer or mapping changes"
+      ],
+      "trap": "Proposing Elasticsearch without discussing the indexing lag or what happens during a full reindex."
+    },
+    {
+      "id": "multi-region",
+      "name": "Multi-region",
+      "prompt": "Users in the EU report 400ms latency. You are single-region in us-east. What now?",
+      "must_cover": [
+        "read replicas near users vs full active-active, and the enormous difference in complexity",
+        "write path: still cross-region, or partitioned by region?",
+        "conflict resolution if writes are accepted in two places -- LWW loses data, CRDTs constrain the data model",
+        "data residency (GDPR) may force partitioning regardless of latency",
+        "cross-region replication cost and lag"
+      ],
+      "trap": "Jumping to active-active. It is a large step up in complexity, and read replicas plus edge caching often solve the actual latency complaint."
+    },
+    {
+      "id": "queue-vs-stream",
+      "name": "Queue vs stream",
+      "prompt": "When do you use SQS-style queueing rather than a Kafka-style log?",
+      "must_cover": [
+        "queue: work distribution, per-message ack, deletion after consumption, easy competing consumers",
+        "log: replayable, multiple independent consumers, ordered per partition, retention-based",
+        "replay requirement is usually the deciding question",
+        "DLQ handling and poison-message policy in both",
+        "operational weight: managed queue is far cheaper to run than a log"
+      ],
+      "trap": "Defaulting to Kafka for everything. If you never replay and have one consumer group, you have bought operational burden for nothing."
+    },
+    {
+      "id": "auth-sessions",
+      "name": "Sessions vs tokens",
+      "prompt": "Stateless JWTs or server-side sessions?",
+      "must_cover": [
+        "JWT revocation is the core problem -- you cannot un-issue a token before expiry",
+        "short-lived access + refresh token, and where the refresh token lives",
+        "session store lookup cost vs the revocation ability it buys",
+        "key rotation and how verifiers learn new keys",
+        "where tokens are stored client-side, and the XSS/CSRF tradeoff"
+      ],
+      "trap": "Choosing JWTs for statelessness and having no revocation answer. 'Logout' and 'ban this user' both require it."
+    },
+    {
+      "id": "hot-key",
+      "name": "Hot keys and skew",
+      "prompt": "One tenant is 40% of your traffic. What breaks?",
+      "must_cover": [
+        "hot partition/shard, and why more capacity does not help a single key",
+        "key splitting/salting, and the read-side fan-out it forces",
+        "per-tenant quotas and isolation so one tenant cannot starve others",
+        "dedicated infrastructure for outlier tenants",
+        "detecting skew before it pages you -- per-key metrics, not just aggregates"
+      ],
+      "trap": "Assuming uniform distribution. Real workloads are Zipfian, and aggregate dashboards hide a single key saturating one node."
+    },
+    {
+      "id": "operational-maturity",
+      "name": "Operational maturity",
+      "prompt": "The design is done. How do you deploy and operate it?",
+      "must_cover": [
+        "deploy strategy: canary or blue-green, and the automated rollback trigger",
+        "SLO with an error budget, and what the budget being spent actually changes",
+        "the alerts you would page on -- symptoms users feel, not causes",
+        "runbook for the top two failure modes",
+        "what you would test in a game day / failure injection"
+      ],
+      "trap": "Ending at the architecture diagram. 2026 interviews explicitly probe operational maturity, and 'how do you know it is broken' is a standard follow-up."
+    }
+  ]
+}
