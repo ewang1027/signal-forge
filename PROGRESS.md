@@ -292,11 +292,61 @@ uv run python -m pipeline.deliver --dry-run          # renders build/digest.html
 
 State lives in `../signal-forge-state`. Delete `signal.db` to start the corpus over.
 
-**Next up is Phase 4** (interview prep): FSRS scheduler over two decks — DSA *patterns*
-rather than individual problems, and system design weighted toward cost reasoning,
-failure recovery, and operational maturity. Needs an interview target date to ramp
-backward from. Then Phase 5 (feedback loop + quality canary). Nothing is wired to
-GitHub Actions yet — no workflow files, no external cron.
+## Phase 4 — prep track (done)
+
+44 cards. **No target date** — the plan called for ramping backward from one, but while
+actively recruiting a callback lands with ~1 week's notice, so the deadline is "any given
+week" and a countdown is the wrong model. Replaced with a **rolling readiness cap**:
+`maximum_interval` capped at 21 days so nothing goes stale, `desired_retention` at 0.93.
+`PREP_INTENSITY` switches to `ramping`/`sharp` when that changes.
+
+Volume comes from **problems, not cards**. With ~24 patterns and a 21-day cap the deck
+settles at 1-2 reviews/day no matter how it is tuned — that is the right amount of
+*recognition* practice and nowhere near enough actual practice. Recruiting mode ships 3
+timed problems + 1 timed design prompt daily.
+
+### What the review caught
+
+**The scheduler was inert.** `grade()` had no caller anywhere, so every card kept the
+same `due_utc`, ordering fell back to primary-key order, and the daily email was a frozen
+alphabetical list of ten — **30 of 40 cards would never have appeared**. My own 30- and
+90-day simulations called `grade()` directly, so they verified the machinery while never
+checking that anything drives it. Fixed with a grading CLI (Phase 5 wires email replies)
+and `RANDOM()` as the final tie-break: 36/40 distinct cards over 12 runs.
+
+**`lapses` and `fails` are now separate counters.** Strict FSRS semantics count a lapse
+only for `Again` on a card already in Review — but a card failed from its first showing
+never graduates out of Learning, so its `lapses` stays 0 forever. Keying weak-area
+targeting off it would have made the worst-known card invisible.
+
+**Weak-area sorting was a positive feedback loop** — shown, failed, weaker, shown again.
+Simulated: one design card served on 87 of 90 days, and three always-failed DSA cards
+occupied half the daily budget every day for 90 days. Now a weighted draw plus a leech
+threshold: after 8 misses a card leaves the review rotation entirely and moves to a
+"sit down and learn this" section, because reviewing it again tomorrow has been tried.
+
+**`review_log` is persisted** — FSRS needs history for `reschedule_card` (re-deriving a
+schedule when intensity changes) and for the parameter optimizer. Neither can be
+backfilled, so it had to be added before any real reviews accumulated.
+
+**Card content errors, all now fixed:** the Dijkstra card listed *Cheapest Flights Within
+K Stops* under an invariant that problem violates, and claimed stale heap entries make it
+quadratic (it stays correct; worst case is O(V·E)); the KMP failure function was defined
+as the whole pattern's border rather than per-prefix; the observability card carried an
+invented "50-70% of the bill" figure; Kafka producer idempotence has been default since
+3.0. Added the two biggest coverage gaps — **binary tree recursion** and **array binary
+search** — plus **opening-ten-minutes** (every other design card was a minute-30
+follow-up; nothing covered how to start) and **API pagination**.
+
+74 tests. The DB layer had zero coverage before this review, which is exactly how the
+inert-scheduler bug survived.
+
+---
+
+**Next up is Phase 5** (feedback loop + quality canary): inbound email replies → theme
+weights, FSRS grades, `TASTE.md`. That is also what makes the prep track self-driving —
+until then grading is the CLI. Then the external cron. Nothing is wired to GitHub Actions
+yet — no workflow files.
 
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the
@@ -305,8 +355,6 @@ account instead of the subscription.
 
 ## Open decisions
 
-- **Interview target date** not set yet. Phase 4's intensity ramp schedules backward from
-  it; until it's set the prep track runs at the low "staying sharp" volume.
 - **Idea cadence** is Mon/Thu. If the harvester turns out to accumulate new signal slower
   than that, drop to weekly rather than letting it re-rank a stale corpus.
 - **ntfy vs Pushover** — starting on ntfy since it's free and needs no account. Pushover
