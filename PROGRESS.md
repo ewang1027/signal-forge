@@ -341,6 +341,36 @@ follow-up; nothing covered how to start) and **API pagination**.
 74 tests. The DB layer had zero coverage before this review, which is exactly how the
 inert-scheduler bug survived.
 
+### Second pass on card content
+
+A separate content review found more, including one I had introduced. The BFS card claimed
+marking visited on dequeue "can blow up exponentially" — **false**. A state is pushed once
+per incoming edge, so the queue goes from O(V) to O(E) but the algorithm stays O(V+E).
+Verified on a complete graph: 16 enqueues vs 6, bounded. The genuinely exponential case is
+having *no* visited set, which enumerates paths instead of states.
+
+Others, all verified before applying:
+- **prefix-sum seed was wrong for half its own problem list** — `{0: 1}` counts subarrays,
+  `{0: -1}` finds the longest, and *Contiguous Array* needs the second.
+- **intervals said sort by start** — *Non-overlapping Intervals* is activity selection and
+  needs sort by **end**; sorting by start silently gives a wrong answer.
+- **Dijkstra was missing the correctness trap that pairs with BFS**: you must *not* mark a
+  node settled on push. That habit transfers straight from the BFS card, and the deck was
+  teaching it with no warning.
+- **Interval DP gave only the open-interval convention** while two of its own problems use
+  the closed one — the classic off-by-one.
+- **Two-pointers invariant didn't justify its own conclusion** (eliminating one candidate
+  per step doesn't get you from O(n²) to O(n); eliminating a family does).
+- **Knapsack now covers loop *order*** (items-outer = combinations, capacity-outer =
+  permutations) alongside direction.
+- **`consistency-models` called read-your-writes a peer of linearizable** — it's a session
+  guarantee, and transaction isolation is a third axis entirely.
+- Added the **transactional outbox** card: "write to the DB, then publish" is the most
+  common distributed-data bug there is and nothing covered it.
+
+45 cards. The lesson worth keeping: in a deck driven by repetition, a wrong card is worse
+than a missing one, so content needs the same verification discipline as code.
+
 ---
 
 **Next up is Phase 5** (feedback loop + quality canary): inbound email replies → theme
