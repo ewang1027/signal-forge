@@ -26,6 +26,10 @@ a dedup filter.
 doesn't fix it. Instead the corpus is partitioned and the generator walks a deterministic
 rotation of domains.
 
+In practice that rotation is doing real work — consecutive runs produced a deterministic
+container-placement scheduler, a crash-point explorer for SQLite, and a type-error blame
+localizer built on minimum-weight unsat cores. Same system, same week, no overlap.
+
 And because [LLM ideas rate as more novel but less feasible, and score lower once actually
 built](https://arxiv.org/pdf/2506.20803), every candidate goes through a feasibility gate
 that forces a milestone breakdown and a first-weekend deliverable.
@@ -59,14 +63,20 @@ Two independent runs, so a failure in one never blocks the other:
 
 ### Sources
 
-| Source | Access |
-|---|---|
-| HN (Algolia) | free, no key, 10k req/hr |
-| GitHub issues | 5k req/hr authenticated |
-| arXiv | free |
-| Reddit | free JSON endpoints |
-| Lobste.rs | free |
-| Postmortem corpora | free |
+| Source | Access | Notes |
+|---|---|---|
+| HN (Algolia) | free, no key, 10k req/hr | phrase probes for complaint language |
+| GitHub issues | 5k req/hr authenticated | reaction counts *are* evidence density |
+| Lobste.rs | free | low volume, high systems density |
+
+Reddit is deliberately absent — its `.json` endpoints now return 403 to unauthenticated
+clients, and a source that silently returns nothing is worse than no source.
+
+Every source runs through the same two gates, which live in `item.py` rather than in each
+source so a new source cannot accidentally skip them: **domain** (is this about systems?)
+and **pain** (did someone actually hit a wall?). Both are required, because they are
+orthogonal — a resume in a hiring thread and a comment listing thirty technical nouns are
+both domain-dense and problem-free. About 95% of raw hits are rejected, which is correct.
 
 ### Prep decks
 
