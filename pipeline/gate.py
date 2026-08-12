@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .config import PROMPTS_DIR
 from .ledger import DUPLICATE_AT, idea_text, nearest
-from .llm import complete_json
+from .llm import LLMError, complete_json
 from .priorart import format_for_prompt, search
 
 
@@ -94,12 +94,7 @@ def check_judged(idea: dict, domain: str | None = None) -> Verdict:
 
 
 def apply_judgement(idea: dict, result: dict) -> dict:
-    """Fold what the gate learned back into the idea.
-
-    A reframe is the interesting case: the evidence showed a real problem, so
-    the idea survives, but pointed at the gap the existing tools leave rather
-    than at the whole space.
-    """
+    """Fold what the gate learned back into the idea."""
     out = dict(idea)
     if note := result.get("prior_art_note"):
         out["prior_art"] = note
@@ -107,15 +102,62 @@ def apply_judgement(idea: dict, result: dict) -> dict:
         out["closest_existing"] = closest
     if revised := result.get("revised_first_weekend"):
         out["first_weekend"] = revised
-    if result.get("verdict") == "reframe" and result.get("reframe"):
-        out["reframe"] = result["reframe"]
     out["feasibility"] = result.get("feasibility", "")
     return out
 
 
+def critique_of(result: dict) -> str:
+    """The gate's objection, as text to hand back for revision."""
+    parts = [result.get("reason", "")]
+    if r := result.get("reframe"):
+        parts.append(f"Sharper version: {r}")
+    if p := result.get("prior_art_note"):
+        parts.append(f"Prior art: {p}")
+    if f := result.get("feasibility"):
+        parts.append(f"Scope reads as: {f}")
+    return "\n\n".join(p for p in parts if p)
+
+
+class Withdrawn(RuntimeError):
+    """The revision concluded there is no hard core left once the objection is
+    honestly accounted for. Better than dressing the same idea up again."""
+
+
+def revise(idea: dict, result: dict) -> dict:
+    """Rewrite an idea so the gate's objection no longer applies.
+
+    A `reframe` verdict means the problem is real but the framing is wrong --
+    observed critiques were "the advertised hard core is inflated, weekend 1 is
+    mostly plumbing" and "the stated hard core is largely imaginary". Shipping
+    that unchanged puts claims in the digest that the pipeline has already
+    concluded are false; rejecting it throws away a problem the gate itself
+    called real and unserved. Revising is what a person does with good feedback.
+    """
+    template = (PROMPTS_DIR / "revise.md").read_text()
+    prompt = (template
+              .replace("{candidate}", json.dumps(idea, indent=2))
+              .replace("{critique}", critique_of(result)))
+
+    revised = complete_json(prompt)
+    if not isinstance(revised, dict):
+        raise Withdrawn("revision returned a non-object")
+    if revised.get("withdrawn"):
+        raise Withdrawn(revised.get("revision_note", "no hard core survived review"))
+
+    # The revision must not invent citations; evidence is fixed at generation.
+    revised["evidence_refs"] = idea.get("evidence_refs", [])
+    return revised
+
+
 def run(conn: sqlite3.Connection, idea: dict, embed_fn,
         domain: str | None = None) -> tuple[bool, dict, list[Verdict]]:
-    """Returns (survived, possibly-revised idea, verdicts in order)."""
+    """Returns (survived, final idea, verdicts in order).
+
+    Nothing ships carrying an objection the pipeline never addressed. A
+    `reframe` gets exactly one revision pass and is then judged again; if it
+    still does not earn a clean verdict, the candidate is not converging and the
+    caller moves on to the next one.
+    """
     verdicts: list[Verdict] = []
 
     for check in (lambda: check_shape(idea),
@@ -130,4 +172,39 @@ def run(conn: sqlite3.Connection, idea: dict, embed_fn,
     if not v.ok:
         return False, idea, verdicts
 
-    return True, apply_judgement(idea, v.detail), verdicts
+    if (v.detail.get("verdict") or "").lower() != "reframe":
+        return True, apply_judgement(idea, v.detail), verdicts
+
+    # Reframe: revise once, then re-judge the revision.
+    try:
+        revised = revise(idea, v.detail)
+    except Withdrawn as exc:
+        verdicts.append(Verdict(False, "revise", f"withdrawn: {exc}"))
+        return False, idea, verdicts
+    except LLMError as exc:
+        verdicts.append(Verdict(False, "revise", f"revision failed: {exc}"))
+        return False, idea, verdicts
+
+    note = revised.get("revision_note", "revised")
+    verdicts.append(Verdict(True, "revise", note))
+
+    shaped = check_shape(revised)
+    verdicts.append(shaped)
+    if not shaped.ok:
+        return False, idea, verdicts
+
+    v2 = check_judged(revised, domain)
+    verdicts.append(v2)
+    if not v2.ok:
+        return False, idea, verdicts
+
+    if (v2.detail.get("verdict") or "").lower() == "reframe":
+        # One pass did not resolve it. Do not keep grinding on a candidate that
+        # is not converging -- the next one costs nothing extra.
+        verdicts.append(Verdict(False, "revise",
+                                "still reframed after revision; not converging"))
+        return False, idea, verdicts
+
+    out = apply_judgement(revised, v2.detail)
+    out["revision_note"] = note
+    return True, out, verdicts

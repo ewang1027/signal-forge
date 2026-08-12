@@ -111,9 +111,20 @@ A mature tool existing is not automatically fatal: a project attacking a
 greenfield one, because the problem is already proven real. What is fatal is
 rebuilding something that works fine with no articulated gap.
 
-When the gate pushes back but the idea survives, **the objection ships with it**.
-It is usually the sharpest paragraph in the email, and hiding it would misrepresent
-what the pipeline concluded.
+The gate returns `ship`, `reframe`, or `kill`. **A reframe gets revised, not
+annotated.** Its critiques are consistently of the form "the problem is real but
+this framing is wrong" — so shipping unchanged would put claims in the digest the
+pipeline has already concluded are false, while rejecting would discard a problem
+the gate itself called real and unserved. Instead the critique goes back to the
+model once, the revision is judged again, and only a clean verdict ships. A
+candidate that still doesn't converge is dropped for the next one.
+
+In practice the revisions concede rather than argue. One rewrote its own core as:
+*"probe success is a one-sided certificate... RFC 8899 DPLPMTUD already ships
+exactly that. Finding a working size is closed."* — then relocated the hard part to
+the attribution problem that actually is open, and cut the scope by half.
+
+**Nothing ships carrying an objection the pipeline never addressed.**
 
 ### The feedback loop
 

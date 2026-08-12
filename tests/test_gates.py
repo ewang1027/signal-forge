@@ -46,6 +46,76 @@ class TestLedgerVectors:
         assert "w2: more" not in text
 
 
+class TestReframeIsRevisedNotAnnotated:
+    """A reframe verdict means the problem is real but the framing is wrong.
+    Shipping it unchanged puts claims in the digest the pipeline has already
+    concluded are false; rejecting it discards a problem the gate called real.
+    So: revise once, re-judge, and ship only on a clean verdict."""
+
+    def _run(self, monkeypatch, judgements, revision):
+        import pipeline.gate as g
+
+        calls = {"n": 0}
+
+        def fake_judged(idea, domain=None):
+            v = judgements[min(calls["n"], len(judgements) - 1)]
+            calls["n"] += 1
+            ok = (v.get("verdict") in g.PASSING_VERDICTS
+                  and v.get("feasibility") != "unrealistic")
+            return g.Verdict(ok, "judged", v.get("verdict", ""), v)
+
+        monkeypatch.setattr(g, "check_judged", fake_judged)
+        monkeypatch.setattr(g, "revise", lambda idea, res: revision)
+        monkeypatch.setattr(g, "check_dedup",
+                            lambda c, i, e: g.Verdict(True, "dedup", "ok"))
+        return g.run(None, _idea(), lambda t: None)
+
+    def test_reframe_then_ship_ships_the_revision(self, monkeypatch):
+        revision = _idea(title="sharpened", revision_note="cut the fake core")
+        ok, out, verdicts = self._run(
+            monkeypatch,
+            [{"verdict": "reframe", "reason": "core is inflated"},
+             {"verdict": "ship", "reason": "now real"}],
+            revision)
+        assert ok
+        assert out["title"] == "sharpened", "must ship the revision, not the original"
+        assert out["revision_note"] == "cut the fake core"
+        assert any(v.stage == "revise" for v in verdicts)
+
+    def test_still_reframed_after_revision_does_not_ship(self, monkeypatch):
+        ok, _, verdicts = self._run(
+            monkeypatch,
+            [{"verdict": "reframe", "reason": "a"},
+             {"verdict": "reframe", "reason": "still a"}],
+            _idea(title="sharpened"))
+        assert not ok, "a candidate that will not converge must not ship"
+        assert any("not converging" in v.reason for v in verdicts)
+
+    def test_clean_ship_skips_revision_entirely(self, monkeypatch):
+        ok, out, verdicts = self._run(
+            monkeypatch, [{"verdict": "ship", "reason": "fine"}],
+            _idea(title="should not appear"))
+        assert ok
+        assert out["title"] == "a thing"
+        assert not any(v.stage == "revise" for v in verdicts)
+
+    def test_withdrawn_revision_does_not_ship(self, monkeypatch):
+        import pipeline.gate as g
+
+        def boom(idea, res):
+            raise g.Withdrawn("no hard core survived")
+
+        monkeypatch.setattr(g, "check_dedup",
+                            lambda c, i, e: g.Verdict(True, "dedup", "ok"))
+        monkeypatch.setattr(g, "check_judged", lambda i, d=None: g.Verdict(
+            True, "judged", "reframe", {"verdict": "reframe", "reason": "x"}))
+        monkeypatch.setattr(g, "revise", boom)
+
+        ok, _, verdicts = g.run(None, _idea(), lambda t: None)
+        assert not ok
+        assert any("withdrawn" in v.reason for v in verdicts)
+
+
 class TestVerdictIsAllowListed:
     """check_judged once rejected only the literal string "kill", so an empty
     object, a null verdict, or the word "reject" all shipped. A gate whose

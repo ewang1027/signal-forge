@@ -192,11 +192,27 @@ permanently; and the pre-commit hook blocked its own `.env.example`, which train
   about a system" from "complaining about an article about a system".
 - `deliver.py` is only exercised via `--dry-run`; no Resend key yet, so a real send is
   unverified.
-- **`reframe` verdicts currently ship with a note attached** rather than being rewritten
-  or rejected. Open question whether that is right: one observed run shipped an idea the
-  gate described as having an "inflated" hard core with a weekend 1 that is "mostly
-  plumbing". The critique is genuinely valuable content, but shipping a known-weak idea
-  with a warning is not obviously better than trying the next candidate.
+## Reframe handling — resolved
+
+`reframe` verdicts used to ship with the critique attached, which meant the digest
+carried claims the pipeline had already concluded were false. The alternative —
+rejecting them — was worse: every observed reframe said some version of *"the problem
+is real but this framing is wrong"* (`the gap over cargo-llvm-lines is real`, `what
+survives is the differential-diagnosis work, which is real and unserved`), so rejecting
+would have shipped almost nothing.
+
+**Resolution: revise once, re-judge, ship only on a clean verdict.** The critique goes
+back to the model with instructions to concede rather than restate; a candidate that
+still reframes after one pass is dropped for the next one. `withdrawn: true` lets the
+revision say there is no hard core left, which beats dressing the same idea up again.
+
+Verified against a real recorded critique. The revision conceded outright — *"probe
+success is a one-sided certificate... RFC 8899 DPLPMTUD already ships exactly that.
+Finding a working size is closed"* — moved the hard core to the identifiability
+problem, replaced the unfailable first weekend, and cut scope to "five weekends of one
+thing". Four tests cover the control flow.
+
+Cost: at most one extra generate + one extra judge call, and only on a reframe.
 - **Lobsters items get `created_utc = since`**, not a real timestamp — the per-comment
   dates are strings that weren't worth parsing during Phase 2. This feeds the recency
   decay in `evidence_score()`, so lobsters evidence is mis-weighted. Fix before the

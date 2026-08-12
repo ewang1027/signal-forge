@@ -57,12 +57,13 @@ def render_idea(idea: dict, domain: str) -> str:
         closest = (f' Closest existing: <a href="https://github.com/{_esc(repo)}">'
                    f'{_esc(repo)}</a>.')
 
-    # The gate's objection is worth reading even when the idea survives -- it is
-    # usually the sharpest thing in the email, and hiding it would be dishonest
-    # about what the pipeline actually concluded.
+    # Ideas no longer ship with an unaddressed objection -- a reframe is revised
+    # and re-judged first. What is worth showing is that it happened, so the
+    # scope claims can be read with the right amount of trust.
     reframe = ""
-    if note := idea.get("reframe"):
-        reframe = f'<h2>The gate pushed back</h2><div class="hard">{_esc(note)}</div>'
+    if note := idea.get("revision_note"):
+        reframe = (f'<h2>Sharpened after review</h2>'
+                   f'<div class="hard">{_esc(note)}</div>')
 
     feas = ""
     if f := idea.get("feasibility"):
