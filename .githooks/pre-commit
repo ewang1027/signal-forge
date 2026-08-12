@@ -12,27 +12,34 @@ staged=$(git diff --cached --name-only --diff-filter=ACM)
 
 fail=0
 
-# 1. nothing under state/, no databases, no decks, no taste file
-blocked=$(echo "$staged" | grep -E '(^state/|\.db$|\.db-wal$|\.db-journal$|^decks/|(^|/)TASTE\.md$|(^|/)ideas/)' || true)
-if [ -n "$blocked" ]; then
-  echo "BLOCKED: personal state must never be committed to the public repo." >&2
-  echo "$blocked" | sed 's/^/  /' >&2
-  echo "" >&2
-  echo "This data belongs in the private signal-forge-state repo." >&2
-  fail=1
+# 1. nothing under state/, no databases, no decks, no taste file.
+#    The private state repo is *supposed* to hold these, so it opts out via
+#    `git config signalforge.role state`. One hook, one code path -- generating
+#    a trimmed copy for the other repo produced an unbalanced `if` and a hook
+#    that errored out instead of checking anything.
+if [ "$(git config --get signalforge.role || echo code)" != "state" ]; then
+  blocked=$(echo "$staged" | grep -E '(^state/|\.db$|\.db-wal$|\.db-journal$|^decks/|(^|/)TASTE\.md$|(^|/)ideas/)' || true)
+  if [ -n "$blocked" ]; then
+    echo "BLOCKED: personal state must never be committed to the public repo." >&2
+    echo "$blocked" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "This data belongs in the private signal-forge-state repo." >&2
+    fail=1
+  fi
 fi
 
 # 2. no AI attribution anywhere in the staged content.
 #    The hooks themselves are excluded -- they contain these patterns by
 #    definition, and scanning them just makes the guard block its own source.
-scan_paths=$(echo "$staged" | grep -v '^\.githooks/' || true)
-if [ -n "$scan_paths" ]; then
-  attribution=$(git diff --cached -U0 -- $scan_paths | grep -iE '^\+.*(co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖[[:space:]]*generated)' || true)
-  if [ -n "$attribution" ]; then
-    echo "BLOCKED: AI attribution found in staged changes." >&2
-    echo "$attribution" | sed 's/^/  /' >&2
-    fail=1
-  fi
+#    Paths are passed NUL-delimited. Interpolating them unquoted word-splits on
+#    a filename containing a space, git diff then matches nothing, and the scan
+#    silently passes -- a guard that fails open is worse than no guard.
+if git diff --cached --name-only -z --diff-filter=ACM \
+   | grep -zv '^\.githooks/' \
+   | xargs -0 -r git diff --cached -U0 -- \
+   | grep -iE '^\+.*(co-authored-by:[[:space:]]*claude|generated with \[?claude|🤖[[:space:]]*generated)' >&2; then
+  echo "BLOCKED: AI attribution found in staged changes." >&2
+  fail=1
 fi
 
 # 3. secret scan
@@ -42,10 +49,25 @@ if command -v gitleaks >/dev/null 2>&1; then
     fail=1
   fi
 else
-  # gitleaks absent -- fall back to a coarse pattern check rather than nothing
-  leaked=$(git diff --cached -U0 | grep -iE '^\+.*(sk-ant-[a-z0-9-]{20,}|re_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' || true)
+  # gitleaks absent -- fall back to a pattern check rather than nothing.
+  #
+  # Anthropic tokens are base64url, so the character class MUST include _ and .
+  # An earlier version used [a-z0-9-] and therefore let CLAUDE_CODE_OAUTH_TOKEN
+  # straight through -- the one credential this whole system exists to protect.
+  leaked=$(git diff --cached -U0 | grep -iE \
+    '^\+.*(sk-ant-[A-Za-z0-9_.-]{20,}|re_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' || true)
   if [ -n "$leaked" ]; then
     echo "BLOCKED: looks like a credential is staged." >&2
+    fail=1
+  fi
+
+  # The ntfy topic IS the auth and has no distinguishable shape, so the only
+  # way to catch it is by name with a non-empty value.
+  named=$(git diff --cached -U0 | grep -iE \
+    '^\+[[:space:]]*(export[[:space:]]+)?(CLAUDE_CODE_OAUTH_TOKEN|NTFY_TOPIC|RESEND_API_KEY|STATE_REPO_PAT|ANTHROPIC_API_KEY)[[:space:]]*[:=][[:space:]]*[^[:space:]"'"'"']' || true)
+  if [ -n "$named" ]; then
+    echo "BLOCKED: a named credential has a value assigned." >&2
+    echo "$named" | sed 's/=.*/=<redacted>/' | sed 's/^/  /' >&2
     fail=1
   fi
 fi

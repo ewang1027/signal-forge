@@ -99,9 +99,12 @@ Reply <code>more</code>, <code>boring</code>, <code>exists</code>, or
 </div></body></html>"""
 
 
-def latest_unsent(conn: sqlite3.Connection) -> sqlite3.Row | None:
+def next_unsent(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Oldest unsent, not newest. Ordering by id DESC strands anything older
+    than the newest idea permanently -- it can never reach the front of a
+    one-at-a-time queue."""
     return conn.execute(
-        "SELECT * FROM idea WHERE sent_utc IS NULL ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM idea WHERE sent_utc IS NULL ORDER BY id ASC LIMIT 1"
     ).fetchone()
 
 
@@ -141,7 +144,7 @@ def main() -> int:
     args = ap.parse_args()
 
     with connect() as conn:
-        row = latest_unsent(conn)
+        row = next_unsent(conn)
         if row is None:
             print("nothing to send")
             return 0
@@ -157,10 +160,20 @@ def main() -> int:
             print(f"rendered {len(body_html)} bytes -> {out}")
             return 0
 
+        # Order matters. The email is the irreversible step, so it must be
+        # recorded before anything that can fail afterwards -- otherwise an ntfy
+        # outage raises, the commit never happens, and the next run sends the
+        # same email again.
         send_email(subject, body_html)
-        send_push(f"{subject} — {idea.get('one_liner', '')[:120]}")
         conn.execute("UPDATE idea SET sent_utc = ? WHERE id = ?",
                      (int(time.time()), row["id"]))
+        conn.commit()
+
+        # Push is explicitly a nudge; it must never be able to undo the send.
+        try:
+            send_push(f"{subject} — {idea.get('one_liner', '')[:120]}")
+        except Exception as exc:
+            print(f"  push failed ({exc}), email already sent", file=sys.stderr)
 
     print(f"sent: {subject}")
     return 0

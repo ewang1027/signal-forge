@@ -126,15 +126,19 @@ soft guard fails quietly.
 ## Running it
 
 ```sh
-uv sync
+uv sync --extra embed       # plain `uv sync` REMOVES the embedding deps
 cp .env.example .env        # fill in
-git config core.hooksPath .githooks
+./scripts/install-hooks.sh  # installs guards into this repo AND the state repo
 
-uv run python -m pipeline.harvest      # pull signal
-uv run python -m pipeline.themes       # cluster into pain themes
-uv run python -m pipeline.ideate       # generate + gate one idea
-uv run python -m pipeline.prep         # today's cards
-uv run python -m pipeline.deliver      # send
+uv run python -m pipeline.harvest               # pull signal from all sources
+uv run --extra embed python -m pipeline.themes  # cluster into pain themes
+uv run python -m pipeline.ideate                # generate one grounded idea
+uv run python -m pipeline.deliver --dry-run     # render to build/digest.html
 ```
 
-See `samples/` for what the output actually looks like.
+State lives in a sibling `signal-forge-state` checkout, or wherever `STATE_DIR`
+points. It is never created automatically — a missing state directory is a fatal
+error, because silently starting a fresh empty corpus and then committing it over
+the real one is data loss with a green checkmark.
+
+The prep track (`pipeline.prep`) is Phase 4 and not built yet.

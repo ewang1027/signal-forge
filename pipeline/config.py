@@ -32,6 +32,24 @@ MODEL = os.environ.get("SIGNAL_FORGE_MODEL", "claude-opus-5")
 USER_AGENT = "signal-forge/0.1 (+https://github.com/ewang1027/signal-forge)"
 
 
+class StateMissing(RuntimeError):
+    pass
+
+
 def ensure_state_dirs() -> None:
-    for d in (STATE_DIR, IDEAS_DIR, DECKS_DIR):
+    """Create the subdirectories, but never STATE_DIR itself.
+
+    Creating it silently turns a wrong or unset path into a brand-new empty
+    database that the run then reports as a success -- and since the pipeline
+    commits unattended, it would commit that empty DB over the real corpus with
+    a green checkmark. A missing state checkout is fatal, not something to
+    paper over.
+    """
+    if not STATE_DIR.is_dir():
+        raise StateMissing(
+            f"state directory does not exist: {STATE_DIR}\n"
+            "Clone signal-forge-state next to this repo, or set STATE_DIR. "
+            "Refusing to create it -- that would silently start an empty corpus."
+        )
+    for d in (IDEAS_DIR, DECKS_DIR):
         d.mkdir(parents=True, exist_ok=True)

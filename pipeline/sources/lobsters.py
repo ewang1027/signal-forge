@@ -7,10 +7,24 @@ threads. Volume is low; signal-to-noise is high.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 import httpx
 
 from ..item import Item, clean_html, gate
+
+
+def _parse_ts(raw: str | None) -> int:
+    """Real comment timestamps matter: they feed the recency decay in
+    evidence_score. Stubbing them all to one value made every lobsters row
+    maximally stale (weight 0.05) while still granting the full source-diversity
+    bonus, which inflated cross-source themes by a third."""
+    if not raw:
+        return 0
+    try:
+        return int(datetime.fromisoformat(raw).timestamp())
+    except (ValueError, TypeError):
+        return 0
 
 BASE = "https://lobste.rs"
 TAGS = ["programming", "distributed", "databases", "compilers", "performance",
@@ -59,7 +73,7 @@ def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
                         title=title,
                         text=clean_html(comment.get("comment") or ""),
                         author=(comment.get("commenting_user") or ""),
-                        created_utc=since,  # per-comment timestamps are strings; not worth parsing
+                        created_utc=_parse_ts(comment.get("created_at")),
                         engagement=int(comment.get("score") or 0),
                         query=f"tag:{tag}",
                     ))

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 import time
 
 from .config import IDEAS_DIR, PROMPTS_DIR, ensure_state_dirs
@@ -46,7 +47,8 @@ def top_theme(conn: sqlite3.Connection, domain: str) -> sqlite3.Row | None:
         """
         SELECT t.* FROM theme t
         WHERE t.domain = ?
-          AND t.id NOT IN (SELECT theme_id FROM idea WHERE theme_id IS NOT NULL)
+          AND (t.key IS NULL OR t.key NOT IN
+               (SELECT theme_key FROM idea WHERE theme_key IS NOT NULL))
         ORDER BY (t.evidence * t.weight) DESC
         LIMIT 1
         """,
@@ -83,23 +85,51 @@ def domain_evidence(conn: sqlite3.Connection, domain: str,
     ).fetchall()
 
 
-def gather_evidence(conn: sqlite3.Connection, domain: str) -> tuple[list[sqlite3.Row], int | None, str]:
-    """Returns (evidence rows, theme_id or None, provenance description)."""
+def gather_evidence(conn: sqlite3.Connection, domain: str) -> tuple[list[sqlite3.Row], str | None, str]:
+    """Returns (evidence rows, theme key or None, provenance description)."""
     theme = top_theme(conn, domain)
     if theme is not None:
-        rows = theme_evidence(conn, theme["id"])
+        rows = list(theme_evidence(conn, theme["id"]))[:EVIDENCE_PER_IDEA]
         if len(rows) >= 2:
             # top up with domain evidence so a 2-item theme still gets context
             if len(rows) < EVIDENCE_PER_IDEA:
                 seen = {r["url"] for r in rows}
                 extra = [r for r in domain_evidence(conn, domain, EVIDENCE_PER_IDEA)
                          if r["url"] not in seen]
-                rows = list(rows) + extra[: EVIDENCE_PER_IDEA - len(rows)]
-            return rows, theme["id"], (
-                f"theme #{theme['id']} (evidence {theme['evidence']:.2f}, "
+                rows = rows + extra[: EVIDENCE_PER_IDEA - len(rows)]
+            return rows, theme["key"], (
+                f"theme {theme['key']} (evidence {theme['evidence']:.2f}, "
                 f"n={theme['size']}): {theme['label']}"
             )
     return domain_evidence(conn, domain), None, "no clustered theme; using domain-wide evidence"
+
+
+class UngroundedIdea(RuntimeError):
+    """Raised when an idea cites evidence that was never in the corpus."""
+
+
+def validate_refs(idea: dict, rows: list[sqlite3.Row], *, minimum: int = 2) -> list[str]:
+    """Drop cited URLs that were not in the evidence we supplied.
+
+    Models invent plausible-looking HN item IDs. Measured on the first four
+    generations, 3 of 21 cited URLs pointed at items that were never in the
+    corpus -- and the digest renders them under a heading that says "Evidence".
+    For a system whose whole premise is grounding, shipping a fabricated
+    citation is the single worst output it can produce.
+    """
+    supplied = {r["url"] for r in rows}
+    cited = idea.get("evidence_refs") or []
+    kept = [u for u in cited if u in supplied]
+
+    dropped = len(cited) - len(kept)
+    if dropped:
+        print(f"  dropped {dropped}/{len(cited)} fabricated evidence refs", file=sys.stderr)
+    if len(kept) < minimum:
+        raise UngroundedIdea(
+            f"only {len(kept)} of {len(cited)} cited URLs were real; "
+            "refusing to ship an ungrounded idea"
+        )
+    return kept
 
 
 def format_evidence(rows: list[sqlite3.Row]) -> str:
@@ -124,17 +154,23 @@ def generate(domain: str, rows: list[sqlite3.Row]) -> dict:
     return complete_json(prompt)
 
 
-def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_id: int | None) -> str:
+def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_key: str | None) -> str:
     ensure_state_dirs()
-    slug = slugify(idea.get("title", ""))
     now = int(time.time())
+    base = slugify(idea.get("title", ""))
+
+    # Disambiguate rather than letting INSERT OR IGNORE swallow the collision --
+    # a dropped row means deliver finds nothing and reports success.
+    slug = base
+    if conn.execute("SELECT 1 FROM idea WHERE slug = ?", (slug,)).fetchone():
+        slug = f"{base}-{now}"
 
     conn.execute(
         """
-        INSERT OR IGNORE INTO idea (slug, title, body, domain, theme_id, sent_utc)
+        INSERT INTO idea (slug, title, body, domain, theme_key, sent_utc)
         VALUES (?, ?, ?, ?, ?, NULL)
         """,
-        (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain, theme_id),
+        (slug, idea.get("title", ""), json.dumps(idea, indent=2), domain, theme_key),
     )
     (IDEAS_DIR / f"{now}-{slug}.json").write_text(json.dumps(idea, indent=2))
     return slug
@@ -143,7 +179,7 @@ def save(conn: sqlite3.Connection, idea: dict, domain: str, theme_id: int | None
 def main() -> int:
     with connect() as conn:
         domain = peek_domain(conn)
-        rows, theme_id, provenance = gather_evidence(conn, domain)
+        rows, theme_key, provenance = gather_evidence(conn, domain)
 
         if len(rows) < 4:
             # Rotating onto a starved slice is normal early on. Skipping beats
@@ -156,7 +192,8 @@ def main() -> int:
         print(f"{domain}: {provenance}")
         print(f"{domain}: {len(rows)} pieces of evidence")
         idea = generate(domain, rows)
-        slug = save(conn, idea, domain, theme_id)
+        idea["evidence_refs"] = validate_refs(idea, rows)
+        slug = save(conn, idea, domain, theme_key)
         advance_domain(conn)
 
     print(f"\n{idea.get('title')}")

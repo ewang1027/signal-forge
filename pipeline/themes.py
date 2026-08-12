@@ -13,6 +13,7 @@ since that measure has been shown to anti-correlate with what actually matters.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import time
@@ -87,24 +88,57 @@ def label_clusters(texts: list[str], labels: np.ndarray) -> dict[int, str]:
     return out
 
 
+def theme_key(signal_ids: list[int]) -> str:
+    """Stable identity for a cluster, derived from its members.
+
+    Never use the rowid for this: `DELETE FROM theme` resets SQLite's rowid
+    counter, so id=7 names a different cluster after every rebuild.
+    """
+    joined = ",".join(str(i) for i in sorted(signal_ids))
+    return hashlib.sha1(joined.encode()).hexdigest()[:16]
+
+
 def evidence_score(rows: list[dict], now: int) -> float:
     """Recency-weighted count of independent voices, scaled by source diversity.
 
     Independence is (source, author): the same person posting five times about
-    their pet peeve should count once, not five times.
+    their pet peeve counts once, not five times. `max` per voice bounds any
+    single person at 1.0 and defeats thread-flooding.
+
+    The diversity bonus is deliberately computed over *weighted* voices rather
+    than a raw source count. Counting distinct sources lets a single maximally-
+    stale row buy the full multiplier -- measured on real data, one row the
+    decay valued at 0.05 was contributing 35% of the top theme's score. A source
+    that contributes 5% of the evidence should buy 5% of the diversity credit.
     """
     seen: dict[tuple[str, str], float] = {}
+    per_source: dict[str, float] = {}
+
     for r in rows:
-        key = (r["source"], r["author"] or f"anon:{r['id']}")
-        age_days = max(0.0, (now - (r["created_utc"] or now)) / 86400.0)
+        created = r["created_utc"]
+        if not created:
+            # Missing timestamp must not read as "posted today". Dropping the
+            # row is safer than granting it maximum recency.
+            continue
+        author = r["author"]
+        # All anonymous rows from one source collapse to a single voice --
+        # otherwise anonymity multiplies a voice instead of just hiding it.
+        key = (r["source"], author) if author else (r["source"], "\x00anon")
+        age_days = max(0.0, (now - created) / 86400.0)
         weight = math.exp(-age_days / HALF_LIFE_DAYS)
-        # keep the strongest instance per voice rather than summing duplicates
         seen[key] = max(seen.get(key, 0.0), weight)
+        per_source[r["source"]] = max(per_source.get(r["source"], 0.0), weight)
+
+    if not seen:
+        return 0.0
 
     voices = sum(seen.values())
-    n_sources = len({r["source"] for r in rows})
-    # corroboration across independent sources is worth more than volume within one
-    return voices * (1.0 + 0.5 * (n_sources - 1))
+    if len(per_source) < 2:
+        return voices
+
+    strongest = max(per_source.values())
+    corroboration = (sum(per_source.values()) - strongest) / strongest
+    return voices * (1.0 + 0.5 * min(corroboration, float(len(per_source) - 1)))
 
 
 def build() -> list[dict]:
@@ -144,17 +178,18 @@ def build() -> list[dict]:
                     domain_counts[m["domain"]] += 1
             domain = max(domain_counts, key=domain_counts.get) if domain_counts else None
 
+            key = theme_key([m["id"] for m in members])
             cur = conn.execute(
-                "INSERT INTO theme (label, size, evidence, domain, built_utc) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (names.get(cid, ""), len(members), score, domain, now),
+                "INSERT INTO theme (key, label, size, evidence, domain, built_utc) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (key, names.get(cid, ""), len(members), score, domain, now),
             )
             theme_id = cur.lastrowid
             conn.executemany(
                 "INSERT INTO theme_member (theme_id, signal_id) VALUES (?, ?)",
                 [(theme_id, m["id"]) for m in members],
             )
-            built.append({"id": theme_id, "label": names.get(cid, ""),
+            built.append({"id": theme_id, "key": key, "label": names.get(cid, ""),
                           "size": len(members), "evidence": score, "domain": domain})
 
     built.sort(key=lambda t: t["evidence"], reverse=True)
