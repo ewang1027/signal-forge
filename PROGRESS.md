@@ -62,6 +62,50 @@ opinion is not a theme.
 Ideation now grounds on the top-evidence **theme** in the rotation domain, falling back
 to domain-wide rows when a domain has no cluster yet.
 
+## Phase 2 review — fixed
+
+An independent review of Phases 0-2 found several bugs that were live. Fixed:
+
+- **Theme rowids are recycled.** `DELETE FROM theme` resets SQLite's rowid counter, so
+  `idea.theme_id = 7` excluded whichever unrelated cluster later landed on id 7 — which
+  was suppressing the *highest-scoring theme in the database*. Themes now carry a
+  content-derived `key` (sha1 of sorted member ids); `idea.theme_key` matches on that.
+- **The diversity multiplier was inverted.** It counted distinct sources over raw rows,
+  so one maximally-stale row bought the full 1.5×. Decomposed on real data: a lobsters
+  row the decay valued at **0.05 was contributing 35% of the top theme's score**. Now
+  scaled by each source's weighted contribution.
+- **Lobsters timestamps were all stubbed to one value**, which is what made every
+  lobsters row stale in the first place. These two bugs were multiplying each other.
+- **`evidence_refs` were never validated** — 3 of 21 cited URLs across the first four
+  ideas were invented HN item IDs, rendered under a heading that says "Evidence".
+  Fabricated citations are the worst possible output for a system premised on grounding.
+  Now intersected with supplied evidence; an idea with <2 real refs is refused.
+- **No migration path.** `CREATE TABLE IF NOT EXISTS` never adds columns. Indexes now run
+  *after* an explicit `ALTER TABLE` pass — the first attempt at this fix failed
+  immediately because an index on the new column ran before the column existed.
+- **`deliver` could send the same email twice** — an ntfy failure raised before the
+  commit, so the email went out while the DB still said unsent. Email → update → commit,
+  push after, in a try/except. Also `ORDER BY id DESC` stranded older ideas forever.
+- **Security.** The fallback secret scanner's `sk-ant-[a-z0-9-]` class had no underscore,
+  so it let `CLAUDE_CODE_OAUTH_TOKEN` (base64url) straight through — the one credential
+  the system exists to protect. An unquoted path list also let a filename containing a
+  space bypass the attribution scan entirely. Both fixed and tested.
+- **The hooks weren't installed where they mattered.** `core.hooksPath` is local config
+  that no clone inherits, and the *state* repo — the one the pipeline commits to
+  unattended — had no hooks at all. `scripts/install-hooks.sh` installs both; the state
+  repo declares `signalforge.role=state` so it keeps the credential guards but may hold
+  data.
+- **`ensure_state_dirs()` silently created a missing `STATE_DIR`**, turning a wrong path
+  into a fresh empty corpus that a run would then commit over the real one. Now fatal.
+
+29 tests, covering each of these as a regression.
+
+**Correction to an earlier note:** O(n²) clustering is *not* a looming problem. Measured:
+n=5,000 → 2.9s / 200 MB; n=10,000 → 11.8s / 800 MB. At the observed intake rate the
+corpus reaches 1,000 rows in years. The real cost is re-embedding every row on every
+build (cache vectors per `signal.id`), and the real constraint on corpus size is the
+pain lexicon, not any API limit.
+
 ## Known gaps
 
 - Remaining harvest noise is **argumentative, not off-topic** — k8s-vs-docker flamewars
@@ -77,10 +121,53 @@ to domain-wide rows when a domain has no cluster yet.
 - **GitHub source skews to popular feature proposals**, not bug reports — sorting by
   reactions surfaces "add SIMD intrinsics" (353 👍) over failure reports. Arguably still
   valid demand evidence, but consider a parallel `label:bug` query.
-- Corpus is small (200 rows), so evidence scores are all low (max 3.24). Needs to
-  accumulate over weeks before the ranking really discriminates.
-- Clustering is O(n²) and rebuilt wholesale each run. Fine at 200 rows; will need
-  attention somewhere in the low thousands.
+- Corpus is small (~200 rows), so evidence scores are all low. Needs weeks of intake
+  before the ranking really discriminates.
+
+### Open findings from the review, roughly by leverage
+
+1. **The pain lexicon misses the voice the best signal is written in.** Four realistic,
+   on-topic systems complaints written in flat incident-report register were all
+   rejected. Phrases doing the work — *"fell over", "took eleven hours", "we lost every
+   alert", "blocks the whole cluster", "OOMs", "throughput collapses"* — match nothing in
+   `domains.py`. The list is heavy on explicit whining and light on incident prose.
+   65% of the corpus sits at exactly `pain=2`, one marker from being dropped, so **corpus
+   size is a function of lexicon coverage, not of what's out there.** Highest-leverage
+   single change in the codebase. Also `\boom\b` never matches "OOMs", and "spent weeks"
+   never matches "spent three weeks".
+2. **`engagement` is written by every source and read by nothing.** GitHub reaction counts
+   — literal quantified corroboration — are ignored by ranking. A theme carrying 83
+   reactions ranked below one built from anonymous comments. Fix *after* #3, since raw
+   reactions currently measure proposal popularity. Note HN rows all have
+   `engagement=0`: Algolia comment hits carry no `num_comments` field, so that source's
+   value is structurally dead.
+3. **GitHub queries surface proposals, not bugs.** `is:issue is:open reactions:>=15
+   sort:reactions` on these repos is a language-design-proposal detector — roughly 2 of
+   the top 20 are defect reports, and `is:open` compounds it since proposals stay open
+   for years while bugs get closed. Add a parallel `label:bug` query and drop `is:open`
+   for it (a *closed* high-reaction bug is stronger evidence the pain was real).
+4. **Rotation starvation is structural.** 3 of 8 slices have no clustered theme and fall
+   back to `domain_evidence()`, which has no recency filter at all. `observability` is a
+   permanently dead slot — every time the cursor lands there the run produces nothing and
+   burns the delivery. Make rotation evidence-aware (skip to the next domain with enough
+   evidence) and balance the probe list per domain.
+5. **A deterministic generation failure deadlocks the rotation forever.** The cursor only
+   advances on success — right for transient failures, wrong for a prompt that always
+   fails. Add a per-domain consecutive-failure counter and advance after 2.
+6. **Nothing signals failure.** All sources down still exits 0 with a green check. Add a
+   heartbeat (`last_harvest_utc` / `last_deliver_utc` in `kv`) and ntfy if either goes
+   >48h stale.
+7. **Prompt injection is unguarded.** Raw harvested text is interpolated into the prompt
+   inside `<evidence>` tags; any commenter can write `</evidence>` and then instructions.
+   Low stakes now, real in Phase 3 (prior-art search may use tools) and Phase 5 (inbound
+   email). Strip the tags in `clean_html`.
+8. **Smaller:** GitHub timestamps are parsed naive and read as local time (`.replace(tzinfo=utc)`);
+   a bad `GITHUB_TOKEN` 403 is treated as a rate limit and burns 36 minutes sleeping;
+   the prompt goes through `argv` (131 KB cap, and evidence text is visible in `ps`) and
+   should use stdin; domain ties break by dict order so `distributed` wins every tie
+   (7% of rows); embeddings are recomputed from scratch every build; the committed
+   `signal.db` is ~1 MB of poorly-delta-compressing binary per commit — consider
+   committing a `.dump` instead; `USER_AGENT` hardcodes the GitHub handle.
 
 ---
 
