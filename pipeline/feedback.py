@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from html import unescape
 
@@ -36,6 +37,7 @@ IMAP_USER = os.environ.get("IMAP_USER", DIGEST_TO)
 IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
 IMAP_TIMEOUT = int(os.environ.get("IMAP_TIMEOUT", "30"))
+LOOKBACK_DAYS = int(os.environ.get("IMAP_LOOKBACK_DAYS", "14"))
 
 # How far a single verdict moves the weight of the evidence behind an idea.
 #
@@ -58,6 +60,9 @@ WEIGHT_FLOOR, WEIGHT_CEIL = 0.1, 4.0
 
 RATINGS = {"again": Rating.Again, "hard": Rating.Hard,
            "good": Rating.Good, "easy": Rating.Easy}
+
+
+_RE_PREFIX = re.compile(r"^\s*((re|fwd?|aw|sv|antw)\s*:\s*)+", re.I)
 
 
 def _decode(raw) -> str:
@@ -113,31 +118,68 @@ def _open() -> imaplib.IMAP4_SSL:
     return conn
 
 
-def fetch() -> list[Inbound]:
-    """Unread replies. Does NOT mark them read -- see `mark_seen`.
+MAX_PER_RUN = int(os.environ.get("IMAP_MAX_PER_RUN", "20"))
 
-    Marking inside the fetch put the flag before the DB commit, so any failure
-    while applying rolled back the work and left the messages read: lost with
-    no trace, and the `feedback` dedup table never even got a row. Reading with
-    BODY.PEEK and flagging only after a successful commit makes the run
-    at-least-once, which is what the dedup table is there to absorb.
+
+def _sent_subjects(conn: sqlite3.Connection) -> set[str]:
+    """Subjects this system actually sent. Anything else is not feedback."""
+    rows = conn.execute(
+        "SELECT title FROM idea WHERE sent_utc IS NOT NULL").fetchall()
+    return {r["title"].strip().lower() for r in rows if r["title"]}
+
+
+def _is_ours(subject: str, sent: set[str]) -> bool:
+    s = _RE_PREFIX.sub("", subject or "").strip().lower()
+    return bool(s) and (s in sent or s.startswith("prep —") or s.startswith("prep -"))
+
+
+def fetch(db_conn: sqlite3.Connection | None = None) -> list[Inbound]:
+    """Unread replies to OUR digests. Does NOT mark them read -- see `mark_seen`.
+
+    Two guards, both learned the hard way against a real mailbox:
+
+    `SUBJECT "Re:"` alone matched **1,767 unread messages** in a real inbox. Every
+    one would have been parsed as feedback and flagged read -- destroying the
+    unread state of a personal mailbox on the very first run. So the subject must
+    match a digest this system actually sent, and only recent mail is considered.
+
+    And marking inside the fetch put the flag before the DB commit, so a failure
+    mid-apply rolled the work back but left the mail read. Reading with BODY.PEEK
+    and flagging only after a successful commit makes the run at-least-once,
+    which is what the dedup table absorbs.
     """
     if not IMAP_PASSWORD:
         print("IMAP_PASSWORD unset; skipping fetch", file=sys.stderr)
         return []
 
+    sent = _sent_subjects(db_conn) if db_conn is not None else set()
+    since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).strftime("%d-%b-%Y")
+
     out: list[Inbound] = []
+    skipped = 0
     conn = _open()
     try:
         conn.select(IMAP_FOLDER)
-        typ, data = conn.uid("SEARCH", None, "UNSEEN", "SUBJECT", '"Re:"')
+        typ, data = conn.uid("SEARCH", None, "UNSEEN", "SINCE", since,
+                             "SUBJECT", '"Re:"')
         if typ != "OK":
             return []
-        for uid in (data[0].split() if data and data[0] else []):
+        uids = data[0].split() if data and data[0] else []
+        for uid in reversed(uids):            # newest first
+            if len(out) >= MAX_PER_RUN:
+                break
             typ, raw = conn.uid("FETCH", uid, "(BODY.PEEK[])")
             if typ != "OK" or not raw or not raw[0]:
                 continue
             msg = email.message_from_bytes(raw[0][1])
+            subject = _decode(msg.get("Subject"))
+
+            # A dedicated folder is already scoped, so trust it. INBOX is not:
+            # require the subject to be one of ours and never touch the rest.
+            if IMAP_FOLDER.upper() == "INBOX" and not _is_ours(subject, sent):
+                skipped += 1
+                continue
+
             body = _body_of(msg)
             mid = _decode(msg.get("Message-ID"))
             if not mid:
@@ -145,12 +187,15 @@ def fetch() -> list[Inbound]:
                 # runs. Hash the content instead.
                 mid = "sha:" + hashlib.sha1(
                     (_decode(msg.get("Date")) + body).encode()).hexdigest()[:24]
-            out.append(Inbound(uid, mid, _decode(msg.get("Subject")), body))
+            out.append(Inbound(uid, mid, subject, body))
     finally:
         try:
             conn.logout()
         except Exception:
             pass
+
+    if skipped:
+        print(f"  ignored {skipped} unrelated Re: messages (left unread)")
     return out
 
 
@@ -186,9 +231,6 @@ def adjust_theme_weight(conn: sqlite3.Connection, idea_id: int, factor: float) -
             (WEIGHT_FLOOR, WEIGHT_CEIL, factor, r["signal_id"]),
         )
     return len(rows)
-
-
-_RE_PREFIX = re.compile(r"^\s*((re|fwd?|aw|sv|antw)\s*:\s*)+", re.I)
 
 
 def idea_for(conn: sqlite3.Connection, subject: str) -> sqlite3.Row | None:
@@ -334,7 +376,8 @@ def canary(conn: sqlite3.Connection, *, mark: bool = False) -> str | None:
 
 
 def main() -> int:
-    messages = fetch()
+    with connect() as probe:
+        messages = fetch(probe)
     if not messages:
         print("no new replies")
         return 0

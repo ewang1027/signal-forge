@@ -262,3 +262,26 @@ class TestCanaryNumbers:
             assert fb.canary(c, mark=True) is None
             db.set_kv(c, "canary_fired_utc", str(now - 86400 * 30))
             assert fb.canary(c, mark=True), "never re-armed for a persistent non-replier"
+
+
+class TestInboxIsNotPlundered:
+    """A real inbox had 1,767 unread messages with "Re:" in the subject. The
+    original search matched every one -- it would have parsed them all as
+    feedback and marked them read on the first run."""
+
+    def test_only_our_own_subjects_count(self):
+        import pipeline.feedback as fb
+        sent = {"crashgov — a partition-safe restart budget"}
+        assert fb._is_ours("Re: crashgov — a partition-safe restart budget", sent)
+        assert fb._is_ours("Re: prep — 7 due", sent)
+        assert not fb._is_ours("Re: your amazon order has shipped", sent)
+        assert not fb._is_ours("Re: standup notes", sent)
+        assert not fb._is_ours("Re:", sent)
+
+    def test_unknown_subject_is_not_ours_even_with_re(self):
+        import pipeline.feedback as fb
+        assert not fb._is_ours("Re: some idea we never sent", set())
+
+    def test_there_is_a_per_run_cap(self):
+        import pipeline.feedback as fb
+        assert fb.MAX_PER_RUN <= 50
