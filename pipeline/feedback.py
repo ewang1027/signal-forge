@@ -355,12 +355,18 @@ def main() -> int:
                 (msg.message_id, int(time.time()), msg.body[:2000], json.dumps(did)),
             )
             done.append(msg.uid)
+            # Counts only. Which cards were graded, and how, is exactly the
+            # weakness ranking that is meant to stay private -- and this runs in
+            # a public repo whose Actions logs are public. The detail is in the
+            # private DB.
             if did.get("unparsed"):
-                print(f"{msg.subject[:50]}: could not parse -- kept, not applied")
+                print("  reply: could not parse -- kept, not applied")
             elif not any((did["grades"], did["verdict"], did.get("control"))):
-                print(f"{msg.subject[:50]}: nothing actionable -- kept as a note")
+                print("  reply: nothing actionable -- kept as a note")
             else:
-                print(f"{msg.subject[:50]}: {did}")
+                print(f"  reply: {len(did['grades'])} cards graded"
+                      f"{', verdict recorded' if did['verdict'] else ''}"
+                      f"{', ' + did['control'] if did.get('control') else ''}")
 
     # Flag read only after the transaction committed. Doing it inside fetch()
     # meant a failure mid-apply rolled back the work and left the mail read.

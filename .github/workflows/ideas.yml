@@ -1,0 +1,80 @@
+name: ideas
+
+# Fires Mon + Thu, ~20 minutes before `daily`, so a fresh idea is sitting in the
+# queue when the digest assembles. Separate workflow on purpose: the daily prep
+# email must not depend on ideation succeeding.
+#
+# workflow_dispatch only -- see the note in daily.yml about Actions `schedule`.
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_themes:
+        description: "force a theme rebuild even if recent"
+        type: boolean
+        default: false
+
+concurrency:
+  group: signal-forge-state
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check out private state
+        uses: actions/checkout@v4
+        with:
+          repository: ewang1027/signal-forge-state
+          token: ${{ secrets.STATE_REPO_PAT }}
+          path: state-repo
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install (with embeddings)
+        run: uv sync --extra embed
+
+      # ~90 MB of model weights. Without this every run re-downloads them.
+      - name: Cache sentence-transformers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Rebuild themes
+        env:
+          STATE_DIR: ${{ github.workspace }}/state-repo
+        run: uv run --extra embed python -m pipeline.themes
+
+      - name: Ideate
+        env:
+          STATE_DIR: ${{ github.workspace }}/state-repo
+          # The ONLY auth for the model. ANTHROPIC_API_KEY is deliberately not
+          # set anywhere: if present it takes precedence and bills the API
+          # account instead of the subscription.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        # exit 2 means "ran fine, every candidate was rejected" -- a normal
+        # outcome for a gate whose job is sometimes to let nothing through.
+        run: uv run python -m pipeline.ideate || [ $? -eq 2 ]
+
+      - name: Commit state
+        working-directory: state-repo
+        run: |
+          git config user.name "Ethan Wang"
+          git config user.email "172091321+ewang1027@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet || git commit -m "ideas run $(date -u +%Y-%m-%d)"
+          git push

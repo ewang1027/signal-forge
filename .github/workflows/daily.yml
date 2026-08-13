@@ -1,0 +1,78 @@
+name: daily
+
+# workflow_dispatch ONLY. Actions `schedule` is deliberately not used: free-tier
+# cron drift now averages several hours and runs get silently dropped under
+# load, which is fatal for a morning digest. An external cron POSTs this
+# endpoint instead and it fires immediately.
+on:
+  workflow_dispatch:
+    inputs:
+      skip_harvest:
+        description: "skip the harvest step"
+        type: boolean
+        default: false
+
+concurrency:
+  group: signal-forge-state       # never let two runs write the state repo at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check out private state
+        uses: actions/checkout@v4
+        with:
+          repository: ewang1027/signal-forge-state
+          token: ${{ secrets.STATE_REPO_PAT }}
+          path: state-repo
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync
+
+      # Replies first: a grade must land before prep chooses today's cards, and
+      # a verdict before the canary decides whether to complain.
+      - name: Fetch replies
+        env:
+          STATE_DIR: ${{ github.workspace }}/state-repo
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          IMAP_FOLDER: ${{ secrets.IMAP_FOLDER }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+        run: uv run python -m pipeline.feedback
+
+      - name: Harvest
+        if: ${{ !inputs.skip_harvest }}
+        env:
+          STATE_DIR: ${{ github.workspace }}/state-repo
+          GITHUB_TOKEN: ${{ github.token }}
+          HARVEST_LOOKBACK_DAYS: "45"
+        run: uv run python -m pipeline.harvest
+
+      - name: Deliver
+        env:
+          STATE_DIR: ${{ github.workspace }}/state-repo
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+          DIGEST_FROM: ${{ secrets.DIGEST_FROM }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PREP_INTENSITY: ${{ vars.PREP_INTENSITY || 'recruiting' }}
+        run: uv run python -m pipeline.deliver
+
+      - name: Commit state
+        working-directory: state-repo
+        run: |
+          git config user.name "Ethan Wang"
+          git config user.email "172091321+ewang1027@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet || git commit -m "daily run $(date -u +%Y-%m-%d)"
+          git push
