@@ -72,7 +72,7 @@ else
   # documents the credentials would train the --no-verify habit, which disarms
   # every check here.
   named=$(git diff --cached -U0 | grep -iE \
-    '^\+[[:space:]]*(export[[:space:]]+)?(CLAUDE_CODE_OAUTH_TOKEN|NTFY_TOPIC|RESEND_API_KEY|STATE_REPO_PAT|ANTHROPIC_API_KEY)[[:space:]]*[:=][[:space:]]*[^[:space:]#"'"'"']' || true)
+    '^\+[[:space:]]*(export[[:space:]]+)?(CLAUDE_CODE_OAUTH_TOKEN|NTFY_TOPIC|RESEND_API_KEY|STATE_REPO_PAT|ANTHROPIC_API_KEY|IMAP_PASSWORD)[[:space:]]*[:=][[:space:]]*[^[:space:]#"'"'"']' || true)
   if [ -n "$named" ]; then
     echo "BLOCKED: a named credential has a value assigned." >&2
     echo "$named" | sed 's/=.*/=<redacted>/' | sed 's/^/  /' >&2

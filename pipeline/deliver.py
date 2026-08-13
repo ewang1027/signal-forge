@@ -18,8 +18,9 @@ from pathlib import Path
 import httpx
 
 from . import feedback, prep
+from .replies import SENTINEL
 from .config import DIGEST_FROM, DIGEST_TO, NTFY_TOPIC, RESEND_API_KEY, USER_AGENT
-from .db import connect
+from .db import connect, get_kv
 
 CSS = """
 body{font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
@@ -176,6 +177,7 @@ def render(idea: dict | None, domain: str, prep: str = "", alert: str = "") -> s
 {body}
 {prep_block}
 <div class="foot">
+{SENTINEL}<br>
 <b>Just reply to this email.</b><br>
 On the idea: <code>more</code> · <code>boring</code> · <code>exists</code> ·
 <code>too easy</code> · <code>building</code><br>
@@ -206,7 +208,11 @@ def send_email(subject: str, body_html: str) -> None:
     resp = httpx.post(
         "https://api.resend.com/emails",
         headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-        json={"from": DIGEST_FROM, "to": [DIGEST_TO],
+        # reply_to is load-bearing. Without it Reply addresses DIGEST_FROM --
+        # a Resend sending domain, which has no inbound MX -- so every reply
+        # bounces into nothing and the feedback loop is silently dead while
+        # looking fine from the outside.
+        json={"from": DIGEST_FROM, "to": [DIGEST_TO], "reply_to": DIGEST_TO,
               "subject": subject, "html": body_html},
         timeout=30,
     )
@@ -247,7 +253,8 @@ def main() -> int:
             print(f"prep failed ({type(exc).__name__}: {exc})", file=sys.stderr)
             day, prep_html = {}, ""
 
-        row = next_unsent(conn) if not args.prep_only else None
+        paused = get_kv(conn, "ideas_paused", "0") == "1"
+        row = next_unsent(conn) if not (args.prep_only or paused) else None
         idea = json.loads(row["body"]) if row else None
         domain = row["domain"] if row else ""
 

@@ -12,13 +12,17 @@ server, and IMAP is in the standard library.
 from __future__ import annotations
 
 import email
+import hashlib
 import imaplib
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
+from dataclasses import dataclass
 from email.header import decode_header, make_header
+from html import unescape
 
 from fsrs import Rating
 
@@ -31,15 +35,23 @@ IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
 IMAP_USER = os.environ.get("IMAP_USER", DIGEST_TO)
 IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
 IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
+IMAP_TIMEOUT = int(os.environ.get("IMAP_TIMEOUT", "30"))
 
 # How far a single verdict moves the weight of the evidence behind an idea.
+#
+# Balanced so the geometric mean sits at ~1.0: the first cut averaged 0.84, so
+# an "average" verdict quietly punished the evidence and the dial only ever
+# drifted down. `exists` and `too_hard` are near-neutral on purpose -- they
+# judge the IDEA, not whether the underlying complaint is real, and a
+# well-corroborated pain point should not become worse evidence because a bad
+# idea was written about it. (`exists` is the prior-art gate's problem.)
 WEIGHT_STEP: dict[str, float] = {
-    "building": 1.6,   # the strongest possible signal: it got built
-    "more": 1.25,
-    "exists": 0.6,     # also means the prior-art gate missed something
-    "too_easy": 0.7,
-    "too_hard": 0.85,
-    "boring": 0.5,
+    "building": 1.8,   # the strongest possible signal: it got built
+    "more": 1.3,
+    "too_hard": 1.0,
+    "exists": 0.95,
+    "too_easy": 0.85,
+    "boring": 0.6,
 }
 
 WEIGHT_FLOOR, WEIGHT_CEIL = 0.1, 4.0
@@ -55,47 +67,107 @@ def _decode(raw) -> str:
         return str(raw or "")
 
 
+@dataclass
+class Inbound:
+    uid: bytes
+    message_id: str
+    subject: str
+    body: str
+
+
+def _html_to_text(html: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+    text = re.sub(r"(?i)<br\s*/?>|</p>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return unescape(text)
+
+
 def _body_of(msg: email.message.Message) -> str:
+    """Plain text if present, otherwise flattened HTML.
+
+    Some clients send HTML only. Returning "" for those meant the reply was
+    marked read, recorded as processed, and silently discarded.
+    """
     if not msg.is_multipart():
         payload = msg.get_payload(decode=True) or b""
-        return payload.decode(msg.get_content_charset() or "utf-8", "replace")
+        text = payload.decode(msg.get_content_charset() or "utf-8", "replace")
+        return _html_to_text(text) if msg.get_content_type() == "text/html" else text
+
+    html_fallback = ""
     for part in msg.walk():
-        if part.get_content_type() == "text/plain":
-            payload = part.get_payload(decode=True) or b""
-            return payload.decode(part.get_content_charset() or "utf-8", "replace")
-    return ""
+        ctype = part.get_content_type()
+        if ctype not in ("text/plain", "text/html"):
+            continue
+        payload = part.get_payload(decode=True) or b""
+        text = payload.decode(part.get_content_charset() or "utf-8", "replace")
+        if ctype == "text/plain":
+            return text
+        html_fallback = html_fallback or _html_to_text(text)
+    return html_fallback
 
 
-def fetch() -> list[tuple[str, str]]:
-    """Unread replies as (message_id, plain-text body). Marks them read."""
+def _open() -> imaplib.IMAP4_SSL:
+    # Without a timeout a hung server blocks the whole scheduled run.
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, timeout=IMAP_TIMEOUT)
+    conn.login(IMAP_USER, IMAP_PASSWORD)
+    return conn
+
+
+def fetch() -> list[Inbound]:
+    """Unread replies. Does NOT mark them read -- see `mark_seen`.
+
+    Marking inside the fetch put the flag before the DB commit, so any failure
+    while applying rolled back the work and left the messages read: lost with
+    no trace, and the `feedback` dedup table never even got a row. Reading with
+    BODY.PEEK and flagging only after a successful commit makes the run
+    at-least-once, which is what the dedup table is there to absorb.
+    """
     if not IMAP_PASSWORD:
         print("IMAP_PASSWORD unset; skipping fetch", file=sys.stderr)
         return []
 
-    out: list[tuple[str, str]] = []
-    conn = imaplib.IMAP4_SSL(IMAP_HOST)
+    out: list[Inbound] = []
+    conn = _open()
     try:
-        conn.login(IMAP_USER, IMAP_PASSWORD)
         conn.select(IMAP_FOLDER)
-        # Only replies to our own digests, so an unrelated unread email in the
-        # inbox is never parsed as feedback.
-        typ, data = conn.search(None, 'UNSEEN', 'SUBJECT', '"Re:"')
+        typ, data = conn.uid("SEARCH", None, "UNSEEN", "SUBJECT", '"Re:"')
         if typ != "OK":
             return []
-        for num in (data[0].split() if data and data[0] else []):
-            typ, raw = conn.fetch(num, "(RFC822)")
+        for uid in (data[0].split() if data and data[0] else []):
+            typ, raw = conn.uid("FETCH", uid, "(BODY.PEEK[])")
             if typ != "OK" or not raw or not raw[0]:
                 continue
             msg = email.message_from_bytes(raw[0][1])
-            mid = _decode(msg.get("Message-ID")) or f"nomid:{num!r}"
-            out.append((mid, _body_of(msg)))
-            conn.store(num, "+FLAGS", "\\Seen")
+            body = _body_of(msg)
+            mid = _decode(msg.get("Message-ID"))
+            if not mid:
+                # Sequence numbers restart every session, so they collide across
+                # runs. Hash the content instead.
+                mid = "sha:" + hashlib.sha1(
+                    (_decode(msg.get("Date")) + body).encode()).hexdigest()[:24]
+            out.append(Inbound(uid, mid, _decode(msg.get("Subject")), body))
     finally:
         try:
             conn.logout()
         except Exception:
             pass
     return out
+
+
+def mark_seen(uids: list[bytes]) -> None:
+    """Flag messages read, after their effects are safely committed."""
+    if not uids or not IMAP_PASSWORD:
+        return
+    conn = _open()
+    try:
+        conn.select(IMAP_FOLDER)
+        for uid in uids:
+            conn.uid("STORE", uid, "+FLAGS", "\\Seen")
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
 
 
 def adjust_theme_weight(conn: sqlite3.Connection, idea_id: int, factor: float) -> int:
@@ -116,42 +188,78 @@ def adjust_theme_weight(conn: sqlite3.Connection, idea_id: int, factor: float) -
     return len(rows)
 
 
-def latest_sent_idea(conn: sqlite3.Connection) -> sqlite3.Row | None:
+_RE_PREFIX = re.compile(r"^\s*((re|fwd?|aw|sv|antw)\s*:\s*)+", re.I)
+
+
+def idea_for(conn: sqlite3.Connection, subject: str) -> sqlite3.Row | None:
+    """Match the reply to the idea it is actually about.
+
+    The subject carries the idea's title -- `deliver` uses it verbatim. Ideas go
+    out Mon and Thu, so a Thursday-evening reply to Monday's digest would
+    otherwise put its verdict, its weight change and its taste line on the wrong
+    idea entirely.
+    """
+    stripped = _RE_PREFIX.sub("", subject or "").strip()
+    if stripped:
+        row = conn.execute(
+            "SELECT * FROM idea WHERE sent_utc IS NOT NULL AND title = ? "
+            "ORDER BY sent_utc DESC LIMIT 1", (stripped,)
+        ).fetchone()
+        if row:
+            return row
     return conn.execute(
         "SELECT * FROM idea WHERE sent_utc IS NOT NULL "
         "ORDER BY sent_utc DESC LIMIT 1"
     ).fetchone()
 
 
-def apply(conn: sqlite3.Connection, body: str) -> dict:
+def apply(conn: sqlite3.Connection, body: str, subject: str = "") -> dict:
     """Apply one reply. Returns what changed."""
-    known = {c["id"] for cards in prep.all_cards().values() for c in cards}
+    decks = prep.all_cards()
+    known = {c["id"] for cards in decks.values() for c in cards}
     reply = parse(body, known)
     did: dict = {"grades": [], "verdict": None, "signals": 0}
 
+    if reply.unparsed:
+        did["unparsed"] = True
+        set_kv(conn, "last_reply_utc", str(int(time.time())))
+        return did
+
+    if reply.control:
+        set_kv(conn, "ideas_paused", "1" if reply.control == "pause" else "0")
+        did["control"] = reply.control
+
+    prep.ensure_cards(conn)  # a grade must not vanish because prep never ran
     for card_id, grade_word in reply.grades:
         if grade_word == "skip":
             continue
-        deck = next((d for d, cards in prep.all_cards().items()
+        deck = next((d for d, cards in decks.items()
                      if any(c["id"] == card_id for c in cards)), None)
         if deck and prep.grade(conn, deck, card_id, RATINGS[grade_word]):
             did["grades"].append((deck, card_id, grade_word))
 
     if reply.idea_verdict:
-        idea = latest_sent_idea(conn)
+        idea = idea_for(conn, subject)
         if idea is not None:
-            conn.execute(
-                "UPDATE idea SET verdict = ?, verdict_utc = ? WHERE id = ?",
+            # Only the first verdict counts. Replying twice used to compound the
+            # weights -- `boring` then `building` left them at 0.8, not 1.6.
+            changed = conn.execute(
+                "UPDATE idea SET verdict = ?, verdict_utc = ? "
+                "WHERE id = ? AND verdict IS NULL",
                 (reply.idea_verdict, int(time.time()), idea["id"]),
-            )
-            factor = WEIGHT_STEP.get(reply.idea_verdict, 1.0)
-            did["signals"] = adjust_theme_weight(conn, idea["id"], factor)
-            did["verdict"] = reply.idea_verdict
-            taste.record(reply.idea_verdict, idea["title"],
-                         reply.note if reply.note != reply.idea_verdict else "")
+            ).rowcount
+            if changed:
+                factor = WEIGHT_STEP.get(reply.idea_verdict, 1.0)
+                did["signals"] = adjust_theme_weight(conn, idea["id"], factor)
+                did["verdict"] = reply.idea_verdict
+                taste.record(reply.idea_verdict, idea["title"],
+                             reply.note if reply.note != reply.idea_verdict else "")
+            else:
+                did["verdict"] = f"{reply.idea_verdict} (already answered)"
 
-    if not reply.is_empty():
-        set_kv(conn, "last_reply_utc", str(int(time.time())))
+    # Stamped on any received message, not only a parsed one. "sorry, been
+    # swamped" proves the human is there, and the canary is about silence.
+    set_kv(conn, "last_reply_utc", str(int(time.time())))
     return did
 
 
@@ -176,25 +284,42 @@ def canary(conn: sqlite3.Connection, *, mark: bool = False) -> str | None:
     last = int(get_kv(conn, "last_reply_utc", "0"))
     now = int(time.time())
 
+    # Count only what has gone unanswered SINCE the last reply. Counting all
+    # time reported a lifetime backlog -- "99 ideas have gone out unanswered"
+    # after a year, most of them from before a reply that did arrive.
+    since = last
+    if not since:
+        # Never replied: measure from the first send, not from the epoch. The
+        # old fallback invented a fixed number and told a 9-day-old install
+        # nothing had come back in 15 days.
+        row = conn.execute(
+            "SELECT MIN(sent_utc) t FROM idea WHERE sent_utc IS NOT NULL"
+        ).fetchone()
+        since = row["t"] or now
+
     sent = conn.execute(
-        "SELECT COUNT(*) n FROM idea WHERE sent_utc IS NOT NULL AND verdict IS NULL"
+        "SELECT COUNT(*) n FROM idea WHERE sent_utc IS NOT NULL "
+        "AND verdict IS NULL AND sent_utc >= ?", (since,)
     ).fetchone()["n"]
     if sent < SILENCE_IDEAS:
         return None
 
-    quiet_days = (now - last) / 86400 if last else SILENCE_DAYS + 1
+    quiet_days = (now - since) / 86400
     if quiet_days < SILENCE_DAYS:
         return None
 
-    # Only fire once per silent stretch.
-    if int(get_kv(conn, "canary_fired_utc", "0")) > last:
+    # Fire once per silent stretch -- but re-arm after another full stretch, or
+    # someone who never replies at all gets the warning exactly once, ever.
+    fired = int(get_kv(conn, "canary_fired_utc", "0"))
+    if fired > last and (now - fired) < SILENCE_DAYS * 86400:
         return None
     if mark:
         set_kv(conn, "canary_fired_utc", str(now))
 
     domains = conn.execute(
         "SELECT domain, COUNT(*) n FROM idea WHERE sent_utc IS NOT NULL "
-        "AND verdict IS NULL GROUP BY domain ORDER BY n DESC LIMIT 3"
+        "AND verdict IS NULL AND sent_utc >= ? GROUP BY domain "
+        "ORDER BY n DESC LIMIT 3", (since,)
     ).fetchall()
     breakdown = ", ".join(f"{r['domain']} x{r['n']}" for r in domains if r["domain"])
 
@@ -209,29 +334,38 @@ def canary(conn: sqlite3.Connection, *, mark: bool = False) -> str | None:
 
 
 def main() -> int:
-    with connect() as conn:
-        messages = fetch()
-        if not messages:
-            print("no new replies")
-            return 0
+    messages = fetch()
+    if not messages:
+        print("no new replies")
+        return 0
 
-        applied = 0
-        for mid, body in messages:
+    done: list[bytes] = []
+    with connect() as conn:
+        for msg in messages:
             seen = conn.execute(
-                "SELECT 1 FROM feedback WHERE message_id = ?", (mid,)
+                "SELECT 1 FROM feedback WHERE message_id = ?", (msg.message_id,)
             ).fetchone()
             if seen:
+                done.append(msg.uid)
                 continue
-            did = apply(conn, body)
+            did = apply(conn, msg.body, msg.subject)
             conn.execute(
                 "INSERT OR IGNORE INTO feedback (message_id, received_utc, body, applied) "
                 "VALUES (?,?,?,?)",
-                (mid, int(time.time()), body[:2000], json.dumps(did)),
+                (msg.message_id, int(time.time()), msg.body[:2000], json.dumps(did)),
             )
-            applied += 1
-            print(f"{mid[:40]}: {did}")
+            done.append(msg.uid)
+            if did.get("unparsed"):
+                print(f"{msg.subject[:50]}: could not parse -- kept, not applied")
+            elif not any((did["grades"], did["verdict"], did.get("control"))):
+                print(f"{msg.subject[:50]}: nothing actionable -- kept as a note")
+            else:
+                print(f"{msg.subject[:50]}: {did}")
 
-        print(f"\napplied {applied} of {len(messages)} messages")
+    # Flag read only after the transaction committed. Doing it inside fetch()
+    # meant a failure mid-apply rolled back the work and left the mail read.
+    mark_seen(done)
+    print(f"\nprocessed {len(done)} of {len(messages)} messages")
     return 0
 
 

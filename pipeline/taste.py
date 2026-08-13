@@ -9,6 +9,7 @@ does not decompose into fields.
 from __future__ import annotations
 
 from .config import TASTE_PATH
+from .item import _DELIM_RE
 
 DEFAULT = """\
 # Taste
@@ -25,11 +26,21 @@ def load() -> str:
     return DEFAULT
 
 
+def _flatten(text: str, limit: int = 200) -> str:
+    """Reply text goes into TASTE.md, which is interpolated verbatim into the
+    ideation prompt. Left raw, a reply could forge extra bullets with its own
+    newlines or close the evidence tag. Same sanitiser the harvester already
+    applies to comment text."""
+    return _DELIM_RE.sub("", " ".join(text.split()))[:limit]
+
+
 def record(verdict: str, title: str, note: str = "") -> None:
     """Append an observation. Phase 5 calls this from inbound replies."""
     TASTE_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not TASTE_PATH.is_file():
         TASTE_PATH.write_text(DEFAULT)
-    line = f"- `{verdict}` — {title}" + (f" · {note}" if note else "")
+    line = f"- `{verdict}` — {_flatten(title, 120)}"
+    if note:
+        line += f" · {_flatten(note)}"
     with TASTE_PATH.open("a") as fh:
         fh.write(f"{line}\n")

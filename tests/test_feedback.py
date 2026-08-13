@@ -169,3 +169,96 @@ class TestTasteFile:
             _seed_idea(c)
             fb.apply(c, "boring")
         assert "boring" in (tmp_path / "TASTE.md").read_text()
+
+
+class TestSubjectRouting:
+    """Ideas go out Mon and Thu. A Thursday reply to Monday's digest used to put
+    its verdict, weight change and taste line on Thursday's idea."""
+
+    def test_verdict_lands_on_the_idea_replied_to(self, db):
+        import pipeline.feedback as fb
+        now = int(time.time())
+        with db.connect() as c:
+            c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                      "VALUES (1,'a','Monday idea','{}','storage',?)", (now - 86400 * 3,))
+            c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                      "VALUES (2,'b','Thursday idea','{}','storage',?)", (now,))
+            fb.apply(c, "boring", subject="Re: Monday idea")
+            verdicts = {r["id"]: r["verdict"]
+                        for r in c.execute("SELECT id, verdict FROM idea")}
+        assert verdicts[1] == "boring"
+        assert verdicts[2] is None
+
+    def test_unknown_subject_falls_back_to_latest(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_idea(c)
+            fb.apply(c, "boring", subject="Re: something else entirely")
+            assert c.execute("SELECT verdict FROM idea").fetchone()["verdict"] == "boring"
+
+
+class TestDoubleReply:
+    def test_second_verdict_does_not_compound_weights(self, db):
+        """`boring` then `building` used to leave weights at 0.5*1.8, not 1.8."""
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_idea(c)
+            fb.apply(c, "boring")
+            first = c.execute("SELECT weight FROM signal LIMIT 1").fetchone()["weight"]
+            fb.apply(c, "building this")
+            after = c.execute("SELECT weight FROM signal LIMIT 1").fetchone()["weight"]
+        assert after == first, "a second reply changed weights again"
+
+
+class TestPause:
+    def test_pause_sets_the_flag_the_canary_advertises(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            fb.apply(c, "pause")
+            assert db.get_kv(c, "ideas_paused") == "1"
+            fb.apply(c, "resume")
+            assert db.get_kv(c, "ideas_paused") == "0"
+
+
+class TestCanaryNumbers:
+    def test_new_install_reports_a_real_age(self, db):
+        """It used to invent SILENCE_DAYS+1 and tell a 9-day-old install nothing
+        had come back in 15 days."""
+        import pipeline.feedback as fb
+        now = int(time.time())
+        with db.connect() as c:
+            for i in range(1, 6):
+                c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                          "VALUES (?,?,?,?,?,?)",
+                          (i, f"s{i}", f"t{i}", "{}", "storage", now - 86400 * 9))
+            assert fb.canary(c) is None, "9 days is inside the silence window"
+
+    def test_only_counts_ideas_since_the_last_reply(self, db):
+        import pipeline.feedback as fb
+        now = int(time.time())
+        with db.connect() as c:
+            for i in range(1, 51):
+                c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                          "VALUES (?,?,?,?,?,?)",
+                          (i, f"s{i}", f"t{i}", "{}", "storage", now - 86400 * 300))
+            db.set_kv(c, "last_reply_utc", str(now - 86400 * 20))
+            for i in range(51, 56):
+                c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                          "VALUES (?,?,?,?,?,?)",
+                          (i, f"s{i}", f"t{i}", "{}", "storage", now - 86400 * 15))
+            msg = fb.canary(c)
+        assert msg and "5 ideas" in msg, f"reported a lifetime backlog: {msg}"
+
+    def test_rearms_after_another_silent_stretch(self, db):
+        """Someone who never replies got the warning exactly once, ever."""
+        import pipeline.feedback as fb
+        now = int(time.time())
+        with db.connect() as c:
+            for i in range(1, 6):
+                c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc) "
+                          "VALUES (?,?,?,?,?,?)",
+                          (i, f"s{i}", f"t{i}", "{}", "storage", now - 86400 * 60))
+            assert fb.canary(c, mark=True)
+            assert fb.canary(c, mark=True) is None
+            db.set_kv(c, "canary_fired_utc", str(now - 86400 * 30))
+            assert fb.canary(c, mark=True), "never re-armed for a persistent non-replier"

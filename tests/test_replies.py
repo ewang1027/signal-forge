@@ -8,7 +8,8 @@ indistinguishable from real input.
 
 from pipeline.replies import Reply, parse, strip_quoted
 
-CARDS = {"two-pointers", "dijkstra", "cache-eviction", "sliding-window"}
+from pipeline.prep import all_cards
+CARDS = {c["id"] for cs in all_cards().values() for c in cs}
 
 
 class TestQuotedText:
@@ -103,3 +104,57 @@ class TestEmpty:
         r = parse("hey what happened to the thing", CARDS)
         assert r.is_empty()
         assert "what happened" in r.note
+
+
+class TestGradeBinding:
+    """Each card must get ITS OWN grade. Scanning the whole line for one grade
+    meant `two-pointers good, dijkstra again` recorded `two-pointers again` --
+    the user said good and FSRS logged a lapse."""
+
+    def test_two_cards_two_grades_on_one_line(self):
+        r = parse("two-pointers good, dijkstra again", CARDS)
+        assert r.grades == [("two-pointers", "good"), ("dijkstra", "again")]
+
+    def test_mid_sentence_binding(self):
+        r = parse("two-pointers easy but dijkstra was hard", CARDS)
+        assert r.grades == [("two-pointers", "easy"), ("dijkstra", "hard")]
+
+
+class TestCardIdBoundaries:
+    """Ids were matched as unanchored substrings, so `trie` fired inside
+    `retried`, `entries`, `countries`."""
+
+    def test_trie_does_not_match_inside_other_words(self):
+        for text in ("retried it and finally solved it",
+                     "i skimmed the entries, easy",
+                     "the countries thing was trivial"):
+            assert parse(text, CARDS).grades == [], text
+
+    def test_longer_id_wins_over_its_substring(self):
+        """`intervals` is a substring of `dp-intervals`, and iterating a set
+        made which one matched depend on the process hash seed."""
+        assert parse("dp-intervals hard", CARDS).grades == [("dp-intervals", "hard")]
+        assert parse("intervals good", CARDS).grades == [("intervals", "good")]
+
+
+class TestSentinel:
+    def test_sentinel_cut_beats_every_quoting_style(self):
+        from pipeline.replies import SENTINEL
+        body = f"boring\n\n{SENTINEL}\nJust reply to this email.\nOn the idea: more"
+        assert strip_quoted(body) == "boring"
+
+    def test_surviving_footer_is_refused_not_parsed(self):
+        """Wrapped attributions defeat the marker regexes. When our own footer
+        survives, applying it would grade the whole deck off a one-word reply."""
+        body = ("more\n\nOn Tue, Aug 12, 2026 at 9:01 AM\nsignal-forge wrote:\n"
+                "On the idea: more, boring, exists, too easy\n"
+                "On a card, one per line: two-pointers good\nPatterns due\n")
+        r = parse(body, CARDS)
+        assert r.unparsed
+        assert r.grades == [] and r.idea_verdict is None
+
+
+class TestControl:
+    def test_pause_and_resume(self):
+        assert parse("pause", CARDS).control == "pause"
+        assert parse("resume", CARDS).control == "resume"
