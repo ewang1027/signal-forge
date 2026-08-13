@@ -256,7 +256,8 @@ def main() -> int:
             return 0
 
         try:
-            alert = feedback.canary(conn) or ""
+            # Only a real send consumes the canary.
+            alert = feedback.canary(conn, mark=not args.dry_run) or ""
         except Exception as exc:
             print(f"canary failed ({exc})", file=sys.stderr)
             alert = ""

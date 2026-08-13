@@ -165,8 +165,14 @@ SILENCE_DAYS = int(os.environ.get("CANARY_SILENCE_DAYS", "14"))
 SILENCE_IDEAS = int(os.environ.get("CANARY_SILENCE_IDEAS", "4"))
 
 
-def canary(conn: sqlite3.Connection) -> str | None:
-    """Returns a message to append to the next digest, or None."""
+def canary(conn: sqlite3.Connection, *, mark: bool = False) -> str | None:
+    """Returns a message to append to the next digest, or None.
+
+    `mark` is opt-in because this used to record itself as fired on every call,
+    including `--dry-run`. Rendering a test digest therefore silenced the one
+    alert whose entire job is noticing the system has gone stale -- and it
+    silenced it permanently, with no output saying so.
+    """
     last = int(get_kv(conn, "last_reply_utc", "0"))
     now = int(time.time())
 
@@ -183,7 +189,8 @@ def canary(conn: sqlite3.Connection) -> str | None:
     # Only fire once per silent stretch.
     if int(get_kv(conn, "canary_fired_utc", "0")) > last:
         return None
-    set_kv(conn, "canary_fired_utc", str(now))
+    if mark:
+        set_kv(conn, "canary_fired_utc", str(now))
 
     domains = conn.execute(
         "SELECT domain, COUNT(*) n FROM idea WHERE sent_utc IS NOT NULL "

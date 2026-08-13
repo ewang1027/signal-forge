@@ -132,8 +132,19 @@ class TestCanary:
         import pipeline.feedback as fb
         with db.connect() as c:
             self._quiet(c)
-            assert fb.canary(c)
-            assert fb.canary(c) is None, "fired twice for one silent stretch"
+            assert fb.canary(c, mark=True)
+            assert fb.canary(c, mark=True) is None, "fired twice for one silent stretch"
+
+    def test_checking_does_not_consume_it(self, db):
+        """A --dry-run used to mark the canary fired, permanently silencing the
+        one alert whose job is noticing the system has gone stale."""
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            self._quiet(c)
+            assert fb.canary(c)              # peek, as --dry-run does
+            assert fb.canary(c), "a dry run consumed the canary"
+            assert fb.canary(c, mark=True)   # the real send
+            assert fb.canary(c, mark=True) is None
 
     def test_a_reply_resets_it(self, db):
         import pipeline.feedback as fb
