@@ -406,18 +406,50 @@ never warned. The one alert whose entire job is noticing the system has gone sta
 switched off by a preview, with nothing in the output saying so. Marking is opt-in now;
 only a real send consumes it.
 
-107 tests.
+### Review — the loop had four silent failures
+
+**The parser recorded grades nobody typed.** It took the first card on a line and then
+scanned the *whole line* for a grade, so `two-pointers good, dijkstra again` logged
+two-pointers as a lapse. Each card now owns the text from its own end to the next card's
+start.
+
+**Card ids matched as bare substrings**, so `trie` fired inside *retried*, *entries*,
+*countries*. Worse, `intervals` is a substring of `dp-intervals` and matching iterated a
+**set** — whose order is hash-randomised per process — so which card got graded was a coin
+flip per run. Word boundaries and longest-first now.
+
+**IMAP flagged messages read before the DB commit.** Any failure while applying rolled the
+work back and left the mail read: replies lost with no trace, and the `feedback` dedup
+table never even got a row, so it couldn't help. Reads with `BODY.PEEK`, flags only after
+a successful commit.
+
+**`reply_to` was never set**, so Reply addressed the Resend sending domain, which has no
+inbound MX. Every reply would have gone nowhere while the system looked healthy from the
+outside — the whole loop dead on arrival.
+
+Plus: verdicts landed on the newest sent idea rather than the one replied to (ideas go out
+Mon/Thu, so a Thursday reply moved Monday's idea's weights — routes on subject now);
+`TASTE.md` took reply text raw and it goes verbatim into the ideation prompt, so a reply
+could forge bullets or close the evidence tag (the sanitiser existed, it just wasn't
+applied on that path); weight factors averaged 0.84 so an *average* verdict punished the
+evidence, and `exists`/`too_hard` judge the idea rather than whether the complaint is real;
+the canary invented a day count on new installs, never re-armed for someone who never
+replies, and printed a lifetime backlog; `pause` was advertised and did nothing; replying
+twice compounded weights; no IMAP timeout; HTML-only replies were silently dropped.
+
+121 tests.
+
+**Unverified until the first real send:** whether replies actually arrive where `fetch()`
+looks. `reply_to` is now set to `DIGEST_TO` and IMAP reads that mailbox's INBOX, which
+should work — but Gmail marks self-addressed mail as already read, which would defeat the
+`UNSEEN` filter. If replies aren't picked up, the fix is a Gmail filter applying a label
+plus `IMAP_FOLDER` pointed at it. **Check this on day one.**
 
 ---
 
 **Next: wire the external cron** (`workflow_dispatch`, never Actions `schedule` — free-tier
 cron drift averages hours) and verify $0 cost. Nothing is wired to GitHub Actions yet —
 no workflow files exist.
-
-**Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
-a Resend key + verified sender, an ntfy topic, and a Gmail **App Password** for
-`IMAP_PASSWORD` (not the account password). Never set `ANTHROPIC_API_KEY` — it takes
-precedence and bills the API account.
 
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the
