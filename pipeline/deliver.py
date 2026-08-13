@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 
-from . import prep
+from . import feedback, prep
 from .config import DIGEST_FROM, DIGEST_TO, NTFY_TOPIC, RESEND_API_KEY, USER_AGENT
 from .db import connect
 
@@ -113,7 +113,12 @@ def render_prep(day: dict) -> str:
             extra = ""
             if trap := c.get("trap"):
                 extra = f'<div class="hard">trap: {_esc(trap)}</div>'
-            out.append(f"<li><b>{_esc(c.get('name'))}</b><br>{detail}{extra}</li>")
+            # The id is what you type back to grade it. Without it in the email
+            # there is no way to reply, and the scheduler never advances.
+            out.append(
+                f"<li><b>{_esc(c.get('name'))}</b> "
+                f'<code>{_esc(c.get("id"))}</code><br>{detail}{extra}</li>'
+            )
         return "".join(out)
 
     blocks = []
@@ -157,9 +162,12 @@ def render_prep(day: dict) -> str:
     return "".join(blocks)
 
 
-def render(idea: dict | None, domain: str, prep: str = "") -> str:
+def render(idea: dict | None, domain: str, prep: str = "", alert: str = "") -> str:
     body = render_idea(idea, domain) if idea else "<h1>Today's prep</h1>"
     prep_block = prep or ""
+    if alert:
+        body = (f'<div class="hard"><b>This system thinks it has stopped being '
+                f'useful.</b><br>{_esc(alert)}</div>' + body)
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -168,8 +176,13 @@ def render(idea: dict | None, domain: str, prep: str = "") -> str:
 {body}
 {prep_block}
 <div class="foot">
-Reply <code>more</code>, <code>boring</code>, <code>exists</code>, or
-<code>too easy</code> to tune what gets sent.
+<b>Just reply to this email.</b><br>
+On the idea: <code>more</code> · <code>boring</code> · <code>exists</code> ·
+<code>too easy</code> · <code>building</code><br>
+On a card, one per line: <code>two-pointers good</code> ·
+<code>dijkstra again</code> (also <code>hard</code>, <code>easy</code>,
+<code>skip</code>)<br>
+Anything it does not recognise is kept as a note, so plain English is fine.
 </div>
 </div></body></html>"""
 
@@ -242,7 +255,13 @@ def main() -> int:
             print("nothing to send")
             return 0
 
-        body_html = render(idea, domain or "", prep_html)
+        try:
+            alert = feedback.canary(conn) or ""
+        except Exception as exc:
+            print(f"canary failed ({exc})", file=sys.stderr)
+            alert = ""
+
+        body_html = render(idea, domain or "", prep_html, alert)
         subject = (idea.get("title") if idea
                    else f"prep — {len(day['dsa']) + len(day['system_design'])} due")
 

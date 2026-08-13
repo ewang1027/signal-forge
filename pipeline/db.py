@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS signal (
     domain        TEXT,               -- strongest domain match, for slice rotation
     domain_hits   INTEGER DEFAULT 0,  -- how technical it looked
     pain          INTEGER DEFAULT 0,  -- complaint-marker count; orthogonal to domain
+    -- Feedback multiplier. Lives on the SIGNAL, not the theme, because themes
+    -- are rebuilt with new identities every run and would lose it -- the same
+    -- reason exclusion keys off signal ids. A theme's weight is derived as the
+    -- mean of its members'.
+    weight        REAL DEFAULT 1.0,
     UNIQUE(source, external_id)
 );
 
@@ -90,6 +95,15 @@ CREATE TABLE IF NOT EXISTS review (
     fails    INTEGER DEFAULT 0,      -- weak-area signal; drives what resurfaces
     last_utc INTEGER,
     PRIMARY KEY (deck, card_id)
+);
+
+-- Every inbound reply we have processed. `message_id` makes replay harmless:
+-- IMAP will hand back the same message if a run dies before flagging it.
+CREATE TABLE IF NOT EXISTS feedback (
+    message_id  TEXT PRIMARY KEY,
+    received_utc INTEGER NOT NULL,
+    body        TEXT,
+    applied     TEXT            -- what we did, for auditing a misparse
 );
 
 -- Append-only history of every grade. FSRS needs this for two things that
@@ -155,6 +169,7 @@ MIGRATIONS: dict[str, dict[str, str]] = {
         "domain": "TEXT",
         "domain_hits": "INTEGER DEFAULT 0",
         "pain": "INTEGER DEFAULT 0",
+        "weight": "REAL DEFAULT 1.0",
     },
     "theme": {
         "key": "TEXT",

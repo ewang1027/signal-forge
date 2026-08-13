@@ -145,7 +145,8 @@ def build() -> list[dict]:
     now = int(time.time())
     with connect() as conn:
         rows = [dict(r) for r in conn.execute(
-            "SELECT id, source, author, title, text, domain, created_utc, pain FROM signal"
+            "SELECT id, source, author, title, text, domain, created_utc, pain, weight "
+            "FROM signal"
         )]
 
         if len(rows) < MIN_CLUSTER_SIZE:
@@ -179,10 +180,14 @@ def build() -> list[dict]:
             domain = max(domain_counts, key=domain_counts.get) if domain_counts else None
 
             key = theme_key([m["id"] for m in members])
+            # Derived from members, not defaulted to 1.0. Inserting without it
+            # silently erased every feedback adjustment on each rebuild, which
+            # made `ORDER BY evidence * weight` just `evidence`.
+            weight = sum(m.get("weight") or 1.0 for m in members) / len(members)
             cur = conn.execute(
-                "INSERT INTO theme (key, label, size, evidence, domain, built_utc) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (key, names.get(cid, ""), len(members), score, domain, now),
+                "INSERT INTO theme (key, label, size, evidence, domain, built_utc, weight) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (key, names.get(cid, ""), len(members), score, domain, now, weight),
             )
             theme_id = cur.lastrowid
             conn.executemany(
