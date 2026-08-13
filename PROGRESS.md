@@ -447,9 +447,31 @@ plus `IMAP_FOLDER` pointed at it. **Check this on day one.**
 
 ---
 
-**Next: wire the external cron** (`workflow_dispatch`, never Actions `schedule` — free-tier
-cron drift averages hours) and verify $0 cost. Nothing is wired to GitHub Actions yet —
-no workflow files exist.
+## Workflows and cron (done)
+
+Two workflows, both **`workflow_dispatch` only** — no `schedule:` anywhere, because
+free-tier Actions cron drift averages hours and runs get dropped silently under load.
+An external cron (cron-job.org) POSTs the dispatch endpoint, which fires immediately.
+
+- **`daily.yml`** — feedback → harvest → deliver. Replies run *first* so a grade lands
+  before prep picks the day's cards, and a verdict before the canary decides whether to
+  complain.
+- **`ideas.yml`** — Mon/Thu, 20 min earlier so an idea is queued when the digest
+  assembles. Treats exit 2 ("all candidates rejected") as success, since a gate is
+  supposed to ship nothing sometimes.
+
+Both share a `concurrency` group so two runs can never write the state repo at once.
+Separate workflows on purpose: the daily prep email must not depend on ideation working.
+
+`feedback` prints counts rather than card ids — which cards were graded and how *is* the
+weakness ranking, and this repo's Actions logs are public.
+
+**The hook blocked the workflows themselves** on `NAME: ${{ secrets.NAME }}` — a
+reference, not a value. That is the third time a guard has blocked correct work
+(`.env.example`, then `test_failure_collapses...`, now this), which is exactly how the
+`--no-verify` habit gets learned. Value class now excludes `#`, `$`, and end-of-line.
+
+Setup instructions live in **`SETUP.md`**.
 
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the

@@ -187,6 +187,11 @@ in a separate private repo checked out at runtime. That's a structural guarantee
 than a gitignore rule — an unattended daily committer is exactly the situation where a
 soft guard fails quietly.
 
+## Setup
+
+See **[SETUP.md](SETUP.md)** — every credential, where to get it, what it costs
+(nothing), and what breaks if you skip it.
+
 ## Running it
 
 ```sh
