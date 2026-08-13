@@ -17,8 +17,13 @@ from __future__ import annotations
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
+import time
+
+# httpx rather than urllib: the python.org build on macOS does not use the
+# system certificate store, so urllib fails SSL verification against
+# api.cron-job.org. httpx bundles certifi and the project already depends on it.
+# Run with `uv run python scripts/setup-cron.py`.
+import httpx
 
 API = "https://api.cron-job.org"
 REPO = os.environ.get("REPO", "ewang1027/signal-forge")
@@ -29,22 +34,27 @@ TZ_NAME = os.environ.get("TZ_NAME", "Europe/Brussels")
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
-    req = urllib.request.Request(
-        f"{API}{path}",
-        method=method,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={
-            "Authorization": f"Bearer {CRON_KEY}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read().decode()
-            return json.loads(raw) if raw.strip() else {}
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode()[:400]
-        raise SystemExit(f"cron-job.org {method} {path} -> HTTP {e.code}\n  {detail}")
+    # cron-job.org rate-limits job creation, so creating two in a row 429s on
+    # the second. Backing off is the whole fix; the first job succeeded.
+    for attempt in range(5):
+        resp = httpx.request(
+            method,
+            f"{API}{path}",
+            json=body,
+            headers={"Authorization": f"Bearer {CRON_KEY}",
+                     "Content-Type": "application/json"},
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            wait = 15 * (attempt + 1)
+            print(f"  rate limited, waiting {wait}s...")
+            time.sleep(wait)
+            continue
+        if resp.status_code >= 400:
+            raise SystemExit(f"cron-job.org {method} {path} -> HTTP "
+                             f"{resp.status_code}\n  {resp.text[:400]}")
+        return resp.json() if resp.text.strip() else {}
+    raise SystemExit("cron-job.org kept rate limiting; try again in a minute")
 
 
 def job_spec(title: str, workflow: str, hour: int, minute: int,
@@ -112,8 +122,8 @@ def main() -> int:
               f"{s.get('hours')}:{s.get('minutes')} {s.get('timezone')} {when} "
               f"enabled={j.get('enabled')}")
 
-    print("\nfire a test run with:")
-    print(f"  curl -X POST -H 'Authorization: Bearer $CRON_KEY' {API}/jobs/<id>/run")
+    print("\nto test before a scheduled firing, temporarily PATCH the schedule")
+    print("  (cron-job.org has no run-now REST endpoint; use TEST RUN in the web UI)")
     return 0
 
 
