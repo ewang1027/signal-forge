@@ -17,14 +17,14 @@ import time
 
 import httpx
 
-from .config import USER_AGENT
+from .config import USER_AGENT, env
 from .db import connect
 from .item import Item
 from .sources import ALL
 
 # Daily runs only need a short window; the first run wants a real backfill so
 # there is a corpus to cluster before the first Monday.
-LOOKBACK_DAYS = int(os.environ.get("HARVEST_LOOKBACK_DAYS", "45"))
+LOOKBACK_DAYS = int(env("HARVEST_LOOKBACK_DAYS", "45"))
 
 
 def store(items: list[Item]) -> int:

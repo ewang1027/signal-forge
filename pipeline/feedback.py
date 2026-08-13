@@ -28,16 +28,16 @@ from html import unescape
 from fsrs import Rating
 
 from . import prep, taste
-from .config import DIGEST_TO
+from .config import DIGEST_TO, env
 from .db import connect, get_kv, set_kv
 from .replies import parse
 
-IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
+IMAP_HOST = env("IMAP_HOST", "imap.gmail.com")
 IMAP_USER = os.environ.get("IMAP_USER", DIGEST_TO)
-IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
-IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "INBOX")
-IMAP_TIMEOUT = int(os.environ.get("IMAP_TIMEOUT", "30"))
-LOOKBACK_DAYS = int(os.environ.get("IMAP_LOOKBACK_DAYS", "14"))
+IMAP_PASSWORD = env("IMAP_PASSWORD", "")
+IMAP_FOLDER = env("IMAP_FOLDER", "INBOX")
+IMAP_TIMEOUT = int(env("IMAP_TIMEOUT", "30"))
+LOOKBACK_DAYS = int(env("IMAP_LOOKBACK_DAYS", "14"))
 
 # How far a single verdict moves the weight of the evidence behind an idea.
 #
@@ -118,7 +118,7 @@ def _open() -> imaplib.IMAP4_SSL:
     return conn
 
 
-MAX_PER_RUN = int(os.environ.get("IMAP_MAX_PER_RUN", "20"))
+MAX_PER_RUN = int(env("IMAP_MAX_PER_RUN", "20"))
 
 
 def _sent_subjects(conn: sqlite3.Connection) -> set[str]:
@@ -311,8 +311,8 @@ def apply(conn: sqlite3.Connection, body: str, subject: str = "") -> dict:
 # working, from the inside. The only observable difference is that nobody
 # replies any more, so that is what gets watched.
 
-SILENCE_DAYS = int(os.environ.get("CANARY_SILENCE_DAYS", "14"))
-SILENCE_IDEAS = int(os.environ.get("CANARY_SILENCE_IDEAS", "4"))
+SILENCE_DAYS = int(env("CANARY_SILENCE_DAYS", "14"))
+SILENCE_IDEAS = int(env("CANARY_SILENCE_IDEAS", "4"))
 
 
 def canary(conn: sqlite3.Connection, *, mark: bool = False) -> str | None:

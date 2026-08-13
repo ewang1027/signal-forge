@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 from fsrs import Card, Rating, Scheduler, State
 
-from .config import REPO_ROOT
+from .config import REPO_ROOT, env
 from .db import connect
 
 CARDS_DIR = REPO_ROOT / "cards"
@@ -40,7 +40,7 @@ DECKS = ("dsa", "system_design")
 # A card failed this many times is not a scheduling problem -- reviewing it again
 # tomorrow has already been tried and did not work. It gets pulled out of the
 # review rotation and surfaced as something to sit down and learn.
-LEECH_AT = int(os.environ.get("PREP_LEECH_AT", "8"))
+LEECH_AT = int(env("PREP_LEECH_AT", "8"))
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ MODES: dict[str, Intensity] = {
     "recruiting": Intensity(0.93, 21, 10, 3, True),
 }
 
-MODE = os.environ.get("PREP_INTENSITY", "recruiting")
+MODE = env("PREP_INTENSITY", "recruiting")
 
 
 def intensity() -> Intensity:

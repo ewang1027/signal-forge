@@ -9,6 +9,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def env(name: str, default: str = "") -> str:
+    """Environment lookup that treats empty as absent.
+
+    `os.environ.get(k, default)` returns "" when the key exists but is blank,
+    and GitHub Actions sets every referenced secret -- so an unconfigured
+    `${{ secrets.IMAP_HOST }}` becomes an empty string and the default never
+    applies. That silently dialled localhost instead of imap.gmail.com.
+    """
+    return os.environ.get(name) or default
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # All mutable/personal state lives in the private state repo. Defaults to a
@@ -22,13 +33,13 @@ TASTE_PATH = STATE_DIR / "TASTE.md"
 
 PROMPTS_DIR = REPO_ROOT / "prompts"
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-DIGEST_TO = os.environ.get("DIGEST_TO", "")
-DIGEST_FROM = os.environ.get("DIGEST_FROM", "")
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+RESEND_API_KEY = env("RESEND_API_KEY", "")
+DIGEST_TO = env("DIGEST_TO", "")
+DIGEST_FROM = env("DIGEST_FROM", "")
+NTFY_TOPIC = env("NTFY_TOPIC", "")
+GITHUB_TOKEN = env("GITHUB_TOKEN", "")
 
-MODEL = os.environ.get("SIGNAL_FORGE_MODEL", "claude-opus-5")
+MODEL = env("SIGNAL_FORGE_MODEL", "claude-opus-5")
 
 USER_AGENT = "signal-forge/0.1 (+https://github.com/ewang1027/signal-forge)"
 

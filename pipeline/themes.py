@@ -23,6 +23,7 @@ import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+from .config import env
 from .db import connect
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -30,7 +31,7 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # field-level topics ("everything about Rust", n=41), 0.35 is so tight almost
 # nothing corroborates. 0.45 gives clusters that read as one specific recurring
 # complaint, which is what a theme is supposed to be.
-DISTANCE_THRESHOLD = float(os.environ.get("THEME_DISTANCE", "0.45"))
+DISTANCE_THRESHOLD = float(env("THEME_DISTANCE", "0.45"))
 MIN_CLUSTER_SIZE = 2
 HALF_LIFE_DAYS = 180.0      # a complaint from 2 years ago is weaker evidence than one from today
 LABEL_TERMS = 5

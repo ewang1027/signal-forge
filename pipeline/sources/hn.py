@@ -7,6 +7,7 @@ import time
 
 import httpx
 
+from ..config import env
 from ..item import Item, clean_html, gate
 
 ALGOLIA = "https://hn.algolia.com/api/v1/search"
@@ -44,7 +45,7 @@ DOMAIN_PROBES = [
 ]
 
 HITS_PER_PAGE = 100
-MAX_PAGES = int(os.environ.get("HARVEST_PAGES", "3"))
+MAX_PAGES = int(env("HARVEST_PAGES", "3"))
 
 
 def _search(client: httpx.Client, query: str, since: int, *, phrase: bool, page: int) -> dict:

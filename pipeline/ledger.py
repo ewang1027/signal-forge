@@ -24,7 +24,7 @@ import struct
 
 import numpy as np
 
-from .config import IDEAS_DIR
+from .config import IDEAS_DIR, env
 
 # Similarity above which two ideas are the same idea. Cosine over MiniLM
 # embeddings of title+one_liner+problem.
@@ -35,7 +35,7 @@ from .config import IDEAS_DIR
 # Across all pairs, genuinely distinct ideas topped out at 0.605 (two different
 # k8s projects), so there is a wide empty band between "related" and "identical".
 # 0.75 sits in the middle of it.
-DUPLICATE_AT = float(os.environ.get("DEDUP_THRESHOLD", "0.75"))
+DUPLICATE_AT = float(env("DEDUP_THRESHOLD", "0.75"))
 
 
 def idea_text(idea: dict) -> str:

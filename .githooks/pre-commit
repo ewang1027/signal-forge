@@ -66,16 +66,22 @@ else
   fi
 
   # The ntfy topic IS the auth and has no distinguishable shape, so the only
-  # way to catch it is by name with a non-empty value.
+  # way to catch it is by name with a literal value next to it.
   #
-  # The value class excludes three things that are NOT values:
-  #   #  -- .env.example's documented-but-empty `NAME=   # comment`
-  #   $  -- `NAME: ${{ secrets.NAME }}`, the correct way to use one in Actions
-  #   \n -- an empty assignment
-  # Every one of those blocked a legitimate commit before it was excluded, and a
-  # guard that blocks correct work is how people learn to reach for --no-verify.
-  named=$(git diff --cached -U0 | grep -iE \
-    '^\+[[:space:]]*(export[[:space:]]+)?(CLAUDE_CODE_OAUTH_TOKEN|NTFY_TOPIC|RESEND_API_KEY|STATE_REPO_PAT|ANTHROPIC_API_KEY|IMAP_PASSWORD)[[:space:]]*[:=][[:space:]]*[^[:space:]#$"'"'"']' || true)
+  # This check has now blocked four legitimate commits -- `.env.example`'s
+  # documented-empty form, a test function name, `NAME: ${{ secrets.NAME }}` in
+  # a workflow, and `NAME = env("NAME", "")` in config. Each time it failed
+  # closed, which is the right direction, but a guard that cries wolf is how the
+  # --no-verify habit gets learned. So it is now precise about what a *value* is:
+  #
+  #   * lines containing ( $ { are code or interpolation, never a literal
+  #   * the value must be 8+ chars of credential-shaped characters
+  #
+  # `IMAP_PASSWORD=hwkaysmionotwrhq` still trips it; `X = env("X", "")` does not.
+  named=$(git diff --cached -U0 \
+    | grep -vE '[($\{]' \
+    | grep -iE '^\+[[:space:]]*(export[[:space:]]+)?(CLAUDE_CODE_OAUTH_TOKEN|NTFY_TOPIC|RESEND_API_KEY|STATE_REPO_PAT|ANTHROPIC_API_KEY|IMAP_PASSWORD)[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9_/+.-]{8,}' \
+    || true)
   if [ -n "$named" ]; then
     echo "BLOCKED: a named credential has a value assigned." >&2
     echo "$named" | sed 's/=.*/=<redacted>/' | sed 's/^/  /' >&2
