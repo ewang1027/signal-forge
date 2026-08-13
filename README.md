@@ -128,12 +128,39 @@ the attribution problem that actually is open, and cut the scope by half.
 
 ### The feedback loop
 
-A push-only system gets ignored within a month. Replying to the digest with `boring`,
-`exists`, `too easy`, `building this`, or `solved 24m` / `failed` feeds back into theme
-weights, FSRS card state, and a learned taste file.
+A push-only system gets ignored within a month. This is what makes it compound instead —
+and it's also what makes the prep track self-driving, since nothing else ever grades a card.
 
-There's also a quality canary: if engagement drops off for two weeks, the system emails to
-say it thinks it's become irrelevant and asks for recalibration.
+Replies arrive over **IMAP, not a webhook**: a webhook needs a public endpoint and
+something running to receive it, and this is a cron job with no server. `imaplib` is
+stdlib.
+
+One reply can do several things at once:
+
+```
+two-pointers good
+dijkstra again
+boring
+```
+
+That grades two cards, records a verdict on the idea, and down-weights the evidence behind
+it. The parser is deliberately loose — this gets typed on a phone, one-handed, and a
+format that demands precision gets used twice and then never. Anything unrecognised is
+kept as a note.
+
+The case worth defending against is subtle: **the digest quoted back**. It lists every
+card id and the words `more`/`boring` in its own footer, so parsing the quote would grade
+the whole deck off a one-word reply. Quoted text is cut before anything else happens.
+
+Feedback weight lives on **signals, not themes** — themes are rebuilt with fresh
+identities every run, so anything stored on them is erased. A theme's weight is the mean
+of its members', which also means a `boring` suppresses a pain point without killing it:
+as fresh harvest joins the cluster the mean dilutes back toward neutral.
+
+**The quality canary** watches for the failure that has no other symptom. A system that
+has become irrelevant looks exactly like one that is working, from the inside — the only
+observable difference is that nobody replies. After sustained silence it says so, with
+numbers, and asks for one word back. It fires once per silent stretch rather than nagging.
 
 ## Stack
 

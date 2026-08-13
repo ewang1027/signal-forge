@@ -373,10 +373,51 @@ than a missing one, so content needs the same verification discipline as code.
 
 ---
 
-**Next up is Phase 5** (feedback loop + quality canary): inbound email replies → theme
-weights, FSRS grades, `TASTE.md`. That is also what makes the prep track self-driving —
-until then grading is the CLI. Then the external cron. Nothing is wired to GitHub Actions
-yet — no workflow files.
+## Phase 5 — feedback loop (done)
+
+Replies arrive over **IMAP**, not a webhook — a webhook needs a public endpoint and a
+process to receive it; this is a cron job with no server, and `imaplib` is stdlib. One
+reply can grade several cards, record an idea verdict, and adjust evidence weights at once.
+
+**The parser is deliberately loose.** It gets typed on a phone, one-handed. A format that
+demands precision gets used twice and then abandoned, and an unused feedback loop is the
+same as no feedback loop. Unrecognised text is kept as a note.
+
+**The case worth defending against:** the digest quoted back. It lists every card id and
+the words `more`/`boring` in its own footer, so parsing the quote would grade the entire
+deck off a one-word reply. Quoted text is cut before anything else runs, and there's a
+test named for exactly that.
+
+**Weight lives on signals, not themes.** Themes are rebuilt with fresh identities every
+run, so anything stored on them is erased — the same reason exclusion keys off signal ids.
+Also fixed the Phase 2 finding that `themes.build()` inserted without `weight`, silently
+resetting every adjustment and making `ORDER BY evidence * weight` just `evidence`.
+
+Checked whether the weighting is a one-way ratchet, since only cited evidence moves and
+cited evidence is then excluded from future themes. It isn't: a theme of 6 with 3 cited
+drops to 0.75, then dilutes back through 0.83 → 0.88 → 0.90 as fresh harvest joins the
+cluster. `boring` suppresses a pain point without killing it permanently.
+
+### The bug found while reviewing
+
+**A `--dry-run` permanently silenced the canary.** `canary()` recorded itself as fired on
+every call, so rendering a test digest marked the silent stretch handled and the real send
+never warned. The one alert whose entire job is noticing the system has gone stale,
+switched off by a preview, with nothing in the output saying so. Marking is opt-in now;
+only a real send consumes it.
+
+107 tests.
+
+---
+
+**Next: wire the external cron** (`workflow_dispatch`, never Actions `schedule` — free-tier
+cron drift averages hours) and verify $0 cost. Nothing is wired to GitHub Actions yet —
+no workflow files exist.
+
+**Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
+a Resend key + verified sender, an ntfy topic, and a Gmail **App Password** for
+`IMAP_PASSWORD` (not the account password). Never set `ANTHROPIC_API_KEY` — it takes
+precedence and bills the API account.
 
 **Before the first real send** you need: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`,
 a Resend key + verified sender, an ntfy topic, and an interview target date for the
