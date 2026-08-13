@@ -54,7 +54,11 @@ def complete(prompt: str, *, timeout: int = 600) -> str:
         env=_env(),
     )
     if proc.returncode != 0:
-        raise LLMError(f"claude exited {proc.returncode}: {proc.stderr.strip()[:500]}")
+        # The CLI often reports the real problem on stdout, so capturing only
+        # stderr produced `claude exited 1: ` with no way to diagnose it.
+        detail = (proc.stderr.strip() or proc.stdout.strip() or
+                  "(no output on either stream)")
+        raise LLMError(f"claude exited {proc.returncode}: {detail[:600]}")
     return proc.stdout.strip()
 
 
