@@ -598,3 +598,99 @@ showing blank headings — there is a test for it.
   floor. If it rejects too often the floor is the thing to move, not the prompt.
 - Whether three ideas in one email is too much to read in one sitting. The knob is
   `IDEAS_PER_DIGEST`; 2 is a reasonable fallback.
+
+---
+
+# Picking this up
+
+Where things stood when the 2026-08-14 session ended.
+
+## Do these first
+
+**1. Re-run the backfill once the in-flight ideas run has pushed.**
+
+An `ideas` workflow run (`31759794454`) was still going at the end of the session.
+It is the first run of the new multi-slice loop and the new prompt, and it commits
+to the state repo when it finishes. The backfill was deliberately **reverted
+locally** before it could collide — `signal.db` is a binary file, so a local write
+racing the CI push would have to be resolved by hand.
+
+```sh
+gh run view 31759794454 --repo ewang1027/signal-forge     # confirm it finished
+cd ~/signal-forge-state && git pull
+cd ~/signal-forge && CLAUDE_CODE_OAUTH_TOKEN= uv run python scripts/backfill-plainly.py
+cd ~/signal-forge-state && git add -A && git commit -m "plain-language pass for queued ideas" && git push
+```
+
+It is idempotent — it only touches unsent ideas that are missing the fields — so
+running it twice is safe. Verified working before it was reverted: the cgctl idea
+came back with 8 glossary terms and *"a dead program cannot record its own death"*
+in place of *"PSI is a stall-time integral"*.
+
+**2. The local `.env` token is revoked.** `CLAUDE_CODE_OAUTH_TOKEN` in `.env` is an
+older token that was superseded when a new one was minted for the GitHub secret on
+2026-08-13 at 12:46 UTC — minting revokes the previous one. The **CI secret is
+fine**; only the local copy is dead.
+
+Locally the CLI authenticates from the keychain when the variable is empty, which
+is why `CLAUDE_CODE_OAUTH_TOKEN= uv run ...` works above. Either keep doing that or
+mint a fresh one with `claude setup-token` and update `.env`. **Do not** put the
+same token in both without re-checking CI afterwards.
+
+**3. Rotate two credentials that are sitting in `~/.zsh_history` in plaintext.**
+The cron-job.org API key and the fine-grained GitHub PAT were both typed as inline
+environment variables while setting the cron up, so both are in the shell history
+file. The PAT has Actions read/write on this repo.
+
+```sh
+# github.com/settings/tokens -> revoke, reissue, then update the stored job header
+# cron-job.org -> Settings -> API key -> regenerate
+CRON_KEY=... GH_PAT=... TZ_NAME=America/New_York uv run python scripts/setup-cron.py
+```
+
+`setup-cron.py` reads both from the environment, so prefix the command with a
+space (with `HIST_IGNORE_SPACE` set) or export them from a file that is not the
+history.
+
+## Open question
+
+**The cron runs on `America/New_York`; this laptop is on `Europe/Brussels`.** The
+digest fires 07:03 New York, which is 13:03 in Brussels. `DIGEST_TZ` defaults to
+`America/New_York` to match, so "Monday" agrees at both ends — but if the intent is
+a 7am *Brussels* digest, two things move together:
+
+```sh
+# cron-job.org job timezone, via setup-cron.py's TZ_NAME
+TZ_NAME=Europe/Brussels uv run python scripts/setup-cron.py
+gh variable set DIGEST_TZ --body Europe/Brussels --repo ewang1027/signal-forge
+```
+
+They must match. If they drift apart, the cron fires on one Monday and `deliver`
+checks a different one, and the ideas silently never go out on the day they were
+generated for.
+
+## What to watch on the first real Monday
+
+The 06:41 ideas run queues the week; the 07:03 digest carries it.
+
+- **Does the shape gate's 3-term glossary floor reject too much?** If ideas start
+  failing on `glossary must define 3+ terms`, move the floor rather than loosening
+  the prompt — the floor is the thing keeping this from regressing.
+- **Is three ideas too much to read at once?** `gh variable set IDEAS_PER_DIGEST
+  --body 2`. Nothing else has to change.
+- **Do replies still land?** This is the one thing never verified against a real
+  mailbox. Reply `monoblame more` (using a handle the digest actually printed) and
+  check the next run's log says `1 reply`. If it says `0`, the cause is almost
+  certainly Gmail marking self-addressed mail as already read — the fix is the
+  label filter plus `IMAP_FOLDER`, written up in SETUP.md §3.
+- **Verdicts now have to name their idea.** A bare `boring` against a three-idea
+  digest is deliberately *not* applied — it is kept as a note and reported as
+  unattributed. That is correct behaviour, not a bug.
+
+## What did not change
+
+The harvest, themes, ranking, prior-art and prep-scheduling paths are untouched.
+`daily.yml` still fires every morning; only the decision about whether it *sends*
+moved into `pipeline/config.py`. If a digest fails to arrive on a Mon/Wed/Sat, the
+first thing to check is that day's `daily` run log for `is not a send day` — that
+line means the cadence config and the calendar disagree, not that the run broke.
