@@ -129,8 +129,17 @@ def _sent_subjects(conn: sqlite3.Connection) -> set[str]:
 
 
 def _is_ours(subject: str, sent: set[str]) -> bool:
+    """Whether a subject line is one of ours.
+
+    The bare-title form is kept for replies to digests sent before ideas moved
+    to a weekly batch; `deliver` now writes `ideas — a, b, c`. Both prefixes are
+    written in `deliver.main` -- change one and change the other, or replies
+    stop being recognised and the feedback loop dies without a symptom.
+    """
     s = _RE_PREFIX.sub("", subject or "").strip().lower()
-    return bool(s) and (s in sent or s.startswith("prep —") or s.startswith("prep -"))
+    return bool(s) and (s in sent
+                        or s.startswith(("prep —", "prep -",
+                                         "ideas —", "ideas -")))
 
 
 def fetch(db_conn: sqlite3.Connection | None = None) -> list[Inbound]:
@@ -233,33 +242,85 @@ def adjust_theme_weight(conn: sqlite3.Connection, idea_id: int, factor: float) -
     return len(rows)
 
 
-def idea_for(conn: sqlite3.Connection, subject: str) -> sqlite3.Row | None:
-    """Match the reply to the idea it is actually about.
+def last_digest_ideas(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """The ideas that went out together in the most recent digest.
 
-    The subject carries the idea's title -- `deliver` uses it verbatim. Ideas go
-    out Mon and Thu, so a Thursday-evening reply to Monday's digest would
-    otherwise put its verdict, its weight change and its taste line on the wrong
-    idea entirely.
+    They share a `sent_utc` -- `deliver` stamps one timestamp across the batch
+    -- so "what was in the last email" is a query rather than a guess.
+    """
+    return conn.execute(
+        "SELECT * FROM idea WHERE sent_utc = "
+        "(SELECT MAX(sent_utc) FROM idea WHERE sent_utc IS NOT NULL) "
+        "ORDER BY id ASC"
+    ).fetchall()
+
+
+def recent_handles(conn: sqlite3.Connection, limit: int = 12) -> dict[str, int]:
+    """`{reply_id: idea id}` for recently sent ideas, newest first on collision.
+
+    Scoped rather than all-time: handles are short project names and a stale one
+    from months ago should not intercept a reply about this week's digest.
+    """
+    out: dict[str, int] = {}
+    rows = conn.execute(
+        "SELECT id, reply_id FROM idea WHERE sent_utc IS NOT NULL "
+        "AND reply_id IS NOT NULL AND reply_id <> '' "
+        "ORDER BY sent_utc DESC, id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    for row in rows:
+        out.setdefault(row["reply_id"].strip().lower(), row["id"])
+    return out
+
+
+def idea_for(conn: sqlite3.Connection, subject: str) -> sqlite3.Row | None:
+    """Match a reply carrying no idea handle to the idea it must be about.
+
+    Only safe when the digest carried exactly one idea. Digests are weekly
+    batches of two or three now, so a bare `boring` genuinely cannot be
+    attributed -- and attributing it anyway would move the wrong idea's evidence
+    weights and write the wrong line into TASTE.md, both of which feed straight
+    back into what gets generated next.
+
+    The subject is still tried first: it names the idea exactly for digests sent
+    before the batching change.
     """
     stripped = _RE_PREFIX.sub("", subject or "").strip()
-    if stripped:
+    if stripped and not stripped.lower().startswith(("ideas —", "ideas -")):
         row = conn.execute(
             "SELECT * FROM idea WHERE sent_utc IS NOT NULL AND title = ? "
             "ORDER BY sent_utc DESC LIMIT 1", (stripped,)
         ).fetchone()
         if row:
             return row
-    return conn.execute(
-        "SELECT * FROM idea WHERE sent_utc IS NOT NULL "
-        "ORDER BY sent_utc DESC LIMIT 1"
-    ).fetchone()
+
+    batch = last_digest_ideas(conn)
+    return batch[0] if len(batch) == 1 else None
+
+
+def _record_verdict(conn: sqlite3.Connection, idea: sqlite3.Row,
+                    verdict: str, note: str) -> tuple[str, int]:
+    """Apply one verdict to one idea. Returns (what happened, signals moved)."""
+    # Only the first verdict counts. Replying twice used to compound the
+    # weights -- `boring` then `building` left them at 0.8, not 1.6.
+    changed = conn.execute(
+        "UPDATE idea SET verdict = ?, verdict_utc = ? "
+        "WHERE id = ? AND verdict IS NULL",
+        (verdict, int(time.time()), idea["id"]),
+    ).rowcount
+    if not changed:
+        return f"{verdict} (already answered)", 0
+    signals = adjust_theme_weight(conn, idea["id"],
+                                  WEIGHT_STEP.get(verdict, 1.0))
+    taste.record(verdict, idea["title"], note if note != verdict else "")
+    return verdict, signals
 
 
 def apply(conn: sqlite3.Connection, body: str, subject: str = "") -> dict:
     """Apply one reply. Returns what changed."""
     decks = prep.all_cards()
     known = {c["id"] for cards in decks.values() for c in cards}
-    reply = parse(body, known)
+    handles = recent_handles(conn)
+    reply = parse(body, known, set(handles))
     did: dict = {"grades": [], "verdict": None, "signals": 0}
 
     if reply.unparsed:
@@ -280,24 +341,34 @@ def apply(conn: sqlite3.Connection, body: str, subject: str = "") -> dict:
         if deck and prep.grade(conn, deck, card_id, RATINGS[grade_word]):
             did["grades"].append((deck, card_id, grade_word))
 
+    # Verdicts that named their idea. This is the form the digest asks for and
+    # the only one that stays unambiguous once a digest carries several ideas.
+    verdicts: list[str] = []
+    for handle, verdict in reply.idea_verdicts:
+        idea = conn.execute("SELECT * FROM idea WHERE id = ?",
+                            (handles[handle],)).fetchone()
+        if idea is None:
+            continue
+        outcome, signals = _record_verdict(conn, idea, verdict, reply.note)
+        verdicts.append(f"{handle}: {outcome}")
+        did["signals"] += signals
+
+    # A bare verdict. `idea_for` returns None when the last digest carried more
+    # than one idea, because there is no honest way to tell which was meant --
+    # it is kept as a note instead of being guessed onto the wrong one.
     if reply.idea_verdict:
         idea = idea_for(conn, subject)
         if idea is not None:
-            # Only the first verdict counts. Replying twice used to compound the
-            # weights -- `boring` then `building` left them at 0.8, not 1.6.
-            changed = conn.execute(
-                "UPDATE idea SET verdict = ?, verdict_utc = ? "
-                "WHERE id = ? AND verdict IS NULL",
-                (reply.idea_verdict, int(time.time()), idea["id"]),
-            ).rowcount
-            if changed:
-                factor = WEIGHT_STEP.get(reply.idea_verdict, 1.0)
-                did["signals"] = adjust_theme_weight(conn, idea["id"], factor)
-                did["verdict"] = reply.idea_verdict
-                taste.record(reply.idea_verdict, idea["title"],
-                             reply.note if reply.note != reply.idea_verdict else "")
-            else:
-                did["verdict"] = f"{reply.idea_verdict} (already answered)"
+            outcome, signals = _record_verdict(conn, idea, reply.idea_verdict,
+                                               reply.note)
+            verdicts.append(outcome)
+            did["signals"] += signals
+        else:
+            did["ambiguous"] = reply.idea_verdict
+            verdicts.append(f"{reply.idea_verdict} (no idea named, not applied)")
+
+    if verdicts:
+        did["verdict"] = "; ".join(verdicts)
 
     # Stamped on any received message, not only a parsed one. "sorry, been
     # swamped" proves the human is there, and the canary is about silence.

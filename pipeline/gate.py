@@ -36,7 +36,12 @@ def check_shape(idea: dict) -> Verdict:
     or empty field. Catch it here rather than rendering a digest with a blank
     section in it."""
     required = ["title", "one_liner", "problem", "why_hard",
-                "first_weekend", "milestones"]
+                "first_weekend", "milestones",
+                # The plain-language pass is required, not decorative. These
+                # ideas are meant to sit above the reader's current level, and
+                # one he cannot follow is one he cannot choose -- so an idea
+                # that arrives without its ramp is not shippable.
+                "in_plain_terms", "why_it_is_hard_plainly"]
     missing = [k for k in required if not idea.get(k)]
     if missing:
         return Verdict(False, "shape", f"missing fields: {', '.join(missing)}")
@@ -45,6 +50,16 @@ def check_shape(idea: dict) -> Verdict:
     # digest then rendered it one character per <li>.
     if not isinstance(milestones, list) or len(milestones) < 2:
         return Verdict(False, "shape", "milestones must be a list of 2+ items")
+
+    # A glossary of one token term is the model going through the motions. The
+    # jargon is exactly what makes these unreadable, so this is the field most
+    # worth being strict about.
+    glossary = idea.get("glossary")
+    if not isinstance(glossary, list) or len(glossary) < 3:
+        return Verdict(False, "shape", "glossary must define 3+ terms")
+    if any(not (isinstance(t, dict) and t.get("term") and t.get("means"))
+           for t in glossary):
+        return Verdict(False, "shape", "every glossary entry needs term + means")
     return Verdict(True, "shape", "well formed")
 
 

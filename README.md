@@ -3,7 +3,9 @@
 A self-notification system that emails me two things: **project ideas grounded in real
 complaints scraped off the internet**, and **interview prep scheduled by FSRS**.
 
-Ideas land Monday and Thursday. Prep lands daily. It runs on free infrastructure.
+Ideas land Monday, two or three at a time, each with a plain-language pass so an
+idea above my level is still one I can choose. Prep lands Monday, Wednesday and
+Saturday. It runs on free infrastructure.
 
 ## Why it's built this way
 
@@ -42,14 +44,15 @@ that forces a milestone breakdown and a first-weekend deliverable.
 [2 THEMES]   embed + cluster -> pain themes     sunday, local embeddings
      |       carrying recency-weighted evidence counts
      |
-[3 IDEATE]   LLM on a rotated domain slice      mon + thu
+[3 IDEATE]   LLM over 2-3 rotated domain        monday
+     |       slices, one idea from each
      |
-[4 GATE]     dedup ledger, prior-art search,    mon + thu
-     |       feasibility pass, taste filter
+[4 GATE]     dedup ledger, prior-art search,    monday
+     |       feasibility, taste, plain-language
      |
-[5 PREP]     FSRS over two decks                daily, no LLM
+[5 PREP]     FSRS over two decks                mon/wed/sat, no LLM
      |
-[6 DELIVER]  email + push
+[6 DELIVER]  email + push                       mon/wed/sat
      ^
 [7 FEEDBACK] replies -> theme weights, FSRS state, taste
 ```
@@ -58,8 +61,13 @@ Two independent runs, so a failure in one never blocks the other:
 
 | Run | When | Does |
 |---|---|---|
-| daily | every morning | harvest, prep, deliver — no LLM in the critical path |
-| ideas | Mon + Thu | theme rebuild if stale, ideate, gate |
+| daily | fires every morning; sends Mon/Wed/Sat | harvest, replies, prep, deliver — no LLM in the critical path |
+| ideas | Mon | theme rebuild if stale, then 2-3 ideations, each gated |
+
+The `daily` run fires every day but only *sends* on Mon/Wed/Sat. Harvesting and
+reply-fetching want to run daily regardless, and keeping the send cadence in
+`pipeline/config.py` rather than in the cron means a duplicate or hand-fired
+dispatch cannot produce an off-day email. It also means the cadence is testable.
 
 ### Sources
 
@@ -89,15 +97,31 @@ reasoning, failure recovery, operational maturity — and toward the specific om
 sink candidates: Redis without an eviction policy, Kafka without ordering requirements,
 sharding without rebalancing.
 
+### Written to be readable
+
+The ideas are meant to sit **above** my current level — that is the point of the
+whole system. But an idea I can't follow is an idea I can't choose, however good
+it is, and the first drafts were unreadable: *"PSI is a stall-time integral, so
+'warning' is not an event but a threshold crossing you choose"* in the second
+paragraph.
+
+The fix is a ramp, not a simpler idea. Every idea carries a plain-language pass
+before the precise one — what goes wrong today and why it's hard, in words an
+intern knows — then the dense version underneath it untouched, then a glossary of
+every term it used and a couple of things to go read. **The shape gate requires
+all of it**, so an idea that arrives without its ramp doesn't ship.
+
 ### The gates
 
-Ideation produces three candidates; the gates decide whether any of them ships.
-They run cheapest-first, and **a run that rejects all three sends nothing** — the
-point of a gate is that "nothing" is an acceptable outcome.
+Each ideation produces three candidates; the gates decide whether any of them
+ships. They run cheapest-first, and **a run that rejects all three sends
+nothing** — the point of a gate is that "nothing" is an acceptable outcome. A
+weekly digest wants two or three ideas, so it walks that many domain slices,
+with a ceiling on how many generations one run may spend.
 
 | Gate | Cost | What it does |
 |---|---|---|
-| shape | free | required fields present, milestones real |
+| shape | free | required fields present, milestones real, plain-language pass and glossary present |
 | dedup | local embeddings | cosine against every idea ever generated |
 | judged | one model call | prior art + feasibility, against a real repo search |
 
@@ -140,11 +164,14 @@ One reply can do several things at once:
 ```
 two-pointers good
 dijkstra again
-boring
+monoblame boring
 ```
 
-That grades two cards, records a verdict on the idea, and down-weights the evidence behind
-it. The parser is deliberately loose — this gets typed on a phone, one-handed, and a
+That grades two cards, records a verdict on one idea, and down-weights the evidence behind
+it. **A verdict has to name its idea** — the digest prints a short handle next to each one
+— because a bare `boring` against three ideas can't be attributed, and guessing would move
+the wrong idea's evidence weights and write the wrong line into `TASTE.md`. An
+unattributable verdict is kept as a note instead of being applied to the wrong thing. The parser is deliberately loose — this gets typed on a phone, one-handed, and a
 format that demands precision gets used twice and then never. Anything unrecognised is
 kept as a note.
 

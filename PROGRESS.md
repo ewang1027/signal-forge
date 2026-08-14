@@ -487,3 +487,114 @@ account instead of the subscription.
 - **SMS** deliberately deferred. Carrier email-to-SMS gateways are dead and fail silently;
   10DLC is a 2-4 week carrier review. Toll-free verification is the fast lane if real SMS
   becomes worth it.
+
+---
+
+## Cadence, idempotency, and readability (2026-08-14)
+
+### The three emails in one hour
+
+Not a scheduling bug. cron-job.org's execution history shows the `daily` job has
+fired exactly **once** ever, and the `ideas` job **never** — both are scheduled for
+07:03 / 06:41 America/New_York and neither had reached that time yet. The three
+dispatches on 2026-08-13 were 22:18, 22:44 and 22:49 UTC: two manual triggers and
+one web-UI TEST RUN, all during the session that set the cron up.
+
+What made it *look* like a malfunction is the part worth fixing. There was a
+backlog of four unsent ideas, and `deliver` drained one per invocation — so the
+three runs sent three different ideas and read as three legitimate digests rather
+than as a repeat. **Nothing in the code had an opinion about how often it should
+send.** A retrying cron, a double-clicked test run, or a second manual dispatch
+all cost a real email and a queued idea, and would have kept doing so silently.
+
+Two changes:
+
+- **The send cadence lives in `pipeline/config.py`, not in the cron.** The cron
+  still fires `daily` every day — harvest and reply-fetching want to run daily —
+  and `deliver` decides whether today is a send day. A duplicate or hand-fired
+  dispatch cannot produce an off-day email, and the cadence is testable without a
+  scheduler.
+- **One digest per calendar day**, recorded in `kv.last_digest_date` and checked
+  *before* anything is consumed. `--force` overrides both.
+
+Ordering matters in one non-obvious place: `prep.today()` records the problems it
+hands out, so it must not run on a day whose prep is not going out. The cadence
+check happens before it, not after.
+
+`deliver.py` had **zero tests** — the one module where this went wrong. It has 28
+now, and removing the idempotency guard fails two of them.
+
+### Ideas are weekly, two or three at a time
+
+Mon+Thu → **Monday**, `IDEAS_PER_DIGEST` (3) ideas per digest. Prep dropped from
+daily to **Mon/Wed/Sat**.
+
+Three ideas is three passes over three rotation slices, not three survivors from
+one generation. The three candidates in a single call come from one theme and are
+asked to differ *in kind* — they are alternatives to each other, and shipping all
+three would fill the week with one problem seen from three angles, which is
+exactly what the rotation exists to prevent.
+
+Each slice gets its own transaction, because `ideas/*.json` is the dedup ledger's
+source of truth and has to be on disk and embedded before the next slice is gated
+— otherwise two ideas in one run cannot see each other. `MAX_GENERATIONS` caps how
+many slices may cost a model call; a starved slice advances for free, so a young
+corpus with thin domains can still fill a digest.
+
+**A failing slice no longer discards the ones already banked.** Each slice commits
+its own transaction, but an exception escaping `main()` fails the workflow step —
+and the job's `commit state` step then never runs. A revoked token on slice 3
+would have thrown away slices 1 and 2 with it. Found by running it: the local
+`.env` token had been revoked when a new one was minted for the GitHub secret.
+
+### Replies had to change with it
+
+The subject line is how a reply finds its way home — `_is_ours` matches it to
+decide whether a message is feedback at all, and an unrecognised subject kills the
+loop with no symptom. The new `ideas — a, b, c` form is recognised alongside the
+old bare-title one.
+
+More importantly, **a verdict now has to name its idea**. With three ideas in a
+digest, a bare `boring` cannot be attributed, and guessing would move the wrong
+idea's evidence weights and write the wrong line into `TASTE.md` — both of which
+feed straight back into what gets generated next. Each idea prints a short handle
+(`monoblame`), and `monoblame boring` binds to it using the same span logic that
+already binds card grades. Handles are checked against live card ids too: an idea
+called `trie` would make every grade of the `trie` card ambiguous.
+
+A bare verdict still works when the digest carried exactly one idea. Otherwise it
+is kept as a note and reported as unattributed, rather than applied to the wrong
+thing.
+
+### Readable at the level of the person reading them
+
+The ideas are meant to sit above my level — that is the point — but the first
+drafts were unusable. From the cgctl generation: *"PSI is a stall-time integral,
+so 'warning' is not an event but a threshold crossing you choose, and every
+threshold trades lead time against false-positive rate."* Correct, and not
+something you can act on if you have never touched cgroups.
+
+An idea you cannot follow is one you cannot choose, however good it is. So the fix
+is a ramp, not a simpler idea:
+
+- `in_plain_terms` and `why_it_is_hard_plainly` — no jargon, concrete scenario,
+  rendered **above** the precise version, which is left untouched.
+- `glossary` — every term an early-career developer wouldn't know, 3+ enforced.
+- `starting_points` — 2-4 real things to read first.
+
+**The shape gate requires all of it**, so this can't quietly regress into an
+optional nicety: an idea without its ramp does not ship. The prompt now opens by
+describing who is reading it, and says explicitly not to water the idea down to
+reach him.
+
+Ideas queued before this change render without the plain sections rather than
+showing blank headings — there is a test for it.
+
+185 tests.
+
+### Still to verify on the first real Monday
+
+- Whether the model reliably fills `glossary` well enough to clear the 3-term
+  floor. If it rejects too often the floor is the thing to move, not the prompt.
+- Whether three ideas in one email is too much to read in one sitting. The knob is
+  `IDEAS_PER_DIGEST`; 2 is a reasonable fallback.

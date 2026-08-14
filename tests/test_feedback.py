@@ -282,6 +282,103 @@ class TestInboxIsNotPlundered:
         import pipeline.feedback as fb
         assert not fb._is_ours("Re: some idea we never sent", set())
 
+    def test_the_weekly_batch_subject_is_ours(self):
+        """`deliver` writes this form; if `_is_ours` stops recognising it every
+        reply is filtered out and the loop dies with no symptom."""
+        import pipeline.feedback as fb
+        assert fb._is_ours("Re: ideas — monoblame, pathdoctor, archsim", set())
+
     def test_there_is_a_per_run_cap(self):
         import pipeline.feedback as fb
         assert fb.MAX_PER_RUN <= 50
+
+
+def _seed_batch(c, *slugs, stamp=None):
+    """A digest of several ideas, sharing one sent_utc as deliver stamps them."""
+    stamp = stamp or int(time.time())
+    for i, slug in enumerate(slugs, 1):
+        for sid in range(i * 10, i * 10 + 3):
+            c.execute("INSERT INTO signal (id,source,external_id,text,created_utc,"
+                      "harvested_utc,domain) VALUES (?,?,?,?,?,?,?)",
+                      (sid, "hn", str(sid), "x", 1, 1, "storage"))
+        c.execute("INSERT INTO idea (id,slug,title,body,domain,sent_utc,reply_id) "
+                  "VALUES (?,?,?,'{}','storage',?,?)",
+                  (i, slug, f"{slug} title", stamp, slug))
+        c.executemany("INSERT INTO idea_signal VALUES (?,?)",
+                      [(i, sid) for sid in range(i * 10, i * 10 + 3)])
+    return stamp
+
+
+class TestVerdictsFindTheRightIdea:
+    """Three ideas now arrive in one email. A verdict landing on the wrong one
+    moves the wrong evidence weights and writes the wrong line into TASTE.md,
+    both of which feed straight back into what gets generated next."""
+
+    def test_named_verdict_lands_on_the_named_idea(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame", "pathdoctor", "archsim")
+            fb.apply(c, "pathdoctor boring", "Re: ideas — monoblame, pathdoctor, archsim")
+            rows = {r["slug"]: r["verdict"] for r in c.execute(
+                "SELECT slug, verdict FROM idea")}
+        assert rows == {"monoblame": None, "pathdoctor": "boring", "archsim": None}
+
+    def test_several_verdicts_in_one_reply(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame", "pathdoctor", "archsim")
+            fb.apply(c, "monoblame boring\narchsim building",
+                     "Re: ideas — monoblame, pathdoctor, archsim")
+            rows = {r["slug"]: r["verdict"] for r in c.execute(
+                "SELECT slug, verdict FROM idea")}
+        assert rows == {"monoblame": "boring", "pathdoctor": None,
+                        "archsim": "building"}
+
+    def test_bare_verdict_is_not_guessed_onto_one_of_three(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame", "pathdoctor", "archsim")
+            did = fb.apply(c, "boring", "Re: ideas — monoblame, pathdoctor, archsim")
+            verdicts = [r["verdict"] for r in c.execute("SELECT verdict FROM idea")]
+        assert all(v is None for v in verdicts), \
+            "no honest way to tell which of three it meant"
+        assert did.get("ambiguous") == "boring"
+
+    def test_bare_verdict_still_works_for_a_single_idea_digest(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame")
+            fb.apply(c, "boring", "Re: ideas — monoblame")
+            v = c.execute("SELECT verdict FROM idea WHERE slug='monoblame'").fetchone()
+        assert v["verdict"] == "boring"
+
+    def test_only_the_named_idea_moves_its_evidence(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame", "pathdoctor")
+            fb.apply(c, "pathdoctor boring", "Re: ideas — monoblame, pathdoctor")
+            moved = [r["weight"] for r in c.execute(
+                "SELECT weight FROM signal WHERE id >= 20")]
+            untouched = [r["weight"] for r in c.execute(
+                "SELECT weight FROM signal WHERE id < 20")]
+        assert all(w < 1.0 for w in moved)
+        assert all(w == 1.0 for w in untouched)
+
+    def test_a_stale_handle_does_not_intercept_this_week(self, db):
+        """Handles are short project names and get reused across months. Only
+        recently sent ideas are matchable."""
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame")
+            handles = fb.recent_handles(c, limit=1)
+        assert set(handles) == {"monoblame"}
+
+    def test_grades_and_a_named_verdict_in_one_reply(self, db):
+        import pipeline.feedback as fb
+        with db.connect() as c:
+            _seed_batch(c, "monoblame", "pathdoctor")
+            did = fb.apply(c, "two-pointers good\nmonoblame more",
+                           "Re: ideas — monoblame, pathdoctor")
+            v = c.execute("SELECT verdict FROM idea WHERE slug='monoblame'").fetchone()
+        assert v["verdict"] == "more"
+        assert ("dsa", "two-pointers", "good") in did["grades"]

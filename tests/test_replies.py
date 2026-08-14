@@ -158,3 +158,68 @@ class TestControl:
     def test_pause_and_resume(self):
         assert parse("pause", CARDS).control == "pause"
         assert parse("resume", CARDS).control == "resume"
+
+
+IDEAS = {"monoblame", "pathdoctor", "archsim"}
+
+
+class TestNamedIdeaVerdicts:
+    """A weekly digest carries two or three ideas, so a verdict has to say
+    which one it is about. A bare word can no longer be attributed."""
+
+    def test_named_verdict_binds_to_its_idea(self):
+        r = parse("monoblame boring", CARDS, IDEAS)
+        assert r.idea_verdicts == [("monoblame", "boring")]
+        assert r.idea_verdict is None, "it named an idea; nothing is left over"
+
+    def test_several_ideas_judged_in_one_reply(self):
+        r = parse("monoblame boring\npathdoctor more\narchsim building",
+                  CARDS, IDEAS)
+        assert r.idea_verdicts == [("monoblame", "boring"),
+                                   ("pathdoctor", "more"),
+                                   ("archsim", "building")]
+
+    def test_each_idea_owns_the_text_after_it(self):
+        """Same failure the card binding had: one line, two subjects, and the
+        second one's word being applied to the first."""
+        r = parse("monoblame boring, pathdoctor more", CARDS, IDEAS)
+        assert r.idea_verdicts == [("monoblame", "boring"),
+                                   ("pathdoctor", "more")]
+
+    def test_bare_verdict_stays_unattributed(self):
+        r = parse("boring", CARDS, IDEAS)
+        assert r.idea_verdicts == []
+        assert r.idea_verdict == "boring"
+
+    def test_good_after_a_card_is_a_grade_not_a_verdict(self):
+        """`good` means both "graded well" and "approve". Cards resolve first."""
+        r = parse("two-pointers good", CARDS, IDEAS)
+        assert r.grades == [("two-pointers", "good")]
+        assert r.idea_verdicts == []
+        assert r.idea_verdict is None
+
+    def test_good_after_an_idea_is_a_verdict(self):
+        r = parse("monoblame good", CARDS, IDEAS)
+        assert r.idea_verdicts == [("monoblame", "more")]
+
+    def test_grades_and_named_verdicts_coexist(self):
+        r = parse("two-pointers good\nmonoblame more\ndijkstra again",
+                  CARDS, IDEAS)
+        assert sorted(r.grades) == [("dijkstra", "again"), ("two-pointers", "good")]
+        assert r.idea_verdicts == [("monoblame", "more")]
+
+    def test_unknown_handle_is_not_a_verdict(self):
+        r = parse("someproject boring", CARDS, IDEAS)
+        assert r.idea_verdicts == []
+        assert r.idea_verdict == "boring", "the verdict survives as unattributed"
+
+    def test_handle_needs_a_word_boundary(self):
+        r = parse("monoblamed more", CARDS, IDEAS)
+        assert r.idea_verdicts == []
+
+    def test_replying_twice_about_one_idea_counts_once(self):
+        r = parse("monoblame boring\nmonoblame more", CARDS, IDEAS)
+        assert r.idea_verdicts == [("monoblame", "boring")]
+
+    def test_named_verdict_is_not_empty(self):
+        assert not parse("monoblame more", CARDS, IDEAS).is_empty()

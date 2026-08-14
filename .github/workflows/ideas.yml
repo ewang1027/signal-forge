@@ -1,8 +1,11 @@
 name: ideas
 
-# Fires Mon + Thu, ~20 minutes before `daily`, so a fresh idea is sitting in the
-# queue when the digest assembles. Separate workflow on purpose: the daily prep
+# Fires Monday, ~20 minutes before `daily`, so the week's ideas are sitting in
+# the queue when the digest assembles. Separate workflow on purpose: the prep
 # email must not depend on ideation succeeding.
+#
+# One run walks several rotation slices and queues IDEAS_PER_DIGEST ideas, so
+# it is slower than a single generation -- hence the timeout below.
 #
 # workflow_dispatch only -- see the note in daily.yml about Actions `schedule`.
 on:
@@ -20,7 +23,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - name: Check out code
         uses: actions/checkout@v4

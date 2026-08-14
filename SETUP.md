@@ -126,9 +126,15 @@ Settings → Secrets and variables → Actions.
 | `IMAP_FOLDER` | `signal-forge` | only if you made the filter |
 | `NTFY_TOPIC` | from step 5 | optional |
 
-Optional repo **variable** (not a secret): `PREP_INTENSITY` = `recruiting`
-(default), `ramping`, or `sharp`. Change it when you stop interviewing — it
-relaxes the 21-day freshness cap and cuts the daily volume.
+Optional repo **variables** (not secrets):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PREP_INTENSITY` | `recruiting` | `ramping` / `sharp` relax the 21-day freshness cap and cut volume |
+| `DIGEST_TZ` | `America/New_York` | whose Monday it is — must match the cron job's timezone |
+| `PREP_DAYS` | `mon wed sat` | days the prep email goes out |
+| `IDEA_DAYS` | `mon` | days ideas ride along |
+| `IDEAS_PER_DIGEST` | `3` | ideas per weekly digest, and slices one ideation run walks |
 
 ```sh
 gh secret set RESEND_API_KEY --repo ewang1027/signal-forge
@@ -162,6 +168,11 @@ Create a fine-grained PAT with **Actions: read and write** on this repo only, th
 at [cron-job.org](https://cron-job.org) (free, and it shows failure history) add
 two jobs:
 
+Or just run `uv run python scripts/setup-cron.py` with `CRON_KEY`, `GH_PAT` and
+`TZ_NAME` set — it creates both jobs, and re-running updates rather than
+duplicating them. Note that `TZ_NAME` must match `DIGEST_TZ` (below), or "Monday"
+means two different things at either end.
+
 **Daily digest** — every day at your preferred time:
 ```
 POST https://api.github.com/repos/ewang1027/signal-forge/actions/workflows/daily.yml/dispatches
@@ -170,8 +181,12 @@ Headers:  Authorization: Bearer <PAT>
 Body:     {"ref":"main"}
 ```
 
-**Ideas** — Mon and Thu, 20 minutes earlier, so an idea is queued when the digest
-assembles:
+The daily job fires **every day** even though the digest only goes out Mon/Wed/Sat.
+Harvesting and reply-fetching want to run daily regardless; the send cadence lives
+in `pipeline/config.py` so that a duplicate dispatch can't produce an off-day email.
+
+**Ideas** — Monday, 20 minutes earlier, so the week's ideas are queued when the
+digest assembles:
 ```
 POST https://api.github.com/repos/ewang1027/signal-forge/actions/workflows/ideas.yml/dispatches
 (same headers, same body)
@@ -209,6 +224,7 @@ uv run python -m pipeline.harvest
 uv run --extra embed python -m pipeline.themes
 uv run python -m pipeline.ideate
 uv run python -m pipeline.deliver --dry-run     # renders build/digest.html
+uv run python -m pipeline.deliver --force       # sends off-cadence, or twice in a day
 uv run python -m pipeline.feedback
 ```
 

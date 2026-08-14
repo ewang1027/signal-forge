@@ -4,6 +4,11 @@ name: daily
 # cron drift now averages several hours and runs get silently dropped under
 # load, which is fatal for a morning digest. An external cron POSTs this
 # endpoint instead and it fires immediately.
+#
+# This runs every day. The *digest* goes out Mon/Wed/Sat -- that cadence lives
+# in `pipeline.config`, not here, so that a duplicate or hand-fired dispatch
+# cannot produce an off-day email. Harvest and reply-fetching run on the days
+# in between and are the reason the daily trigger is still worth having.
 on:
   workflow_dispatch:
     inputs:

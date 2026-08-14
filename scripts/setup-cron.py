@@ -98,9 +98,14 @@ def main() -> int:
     # Off-round minutes on purpose: everyone schedules on the hour, so :03 and
     # :41 dodge the worst contention on both cron-job.org and GitHub's dispatch
     # queue. The 22-minute gap keeps ideas ahead of the digest that carries them.
+    #
+    # `daily` fires every day even though the digest only goes out Mon/Wed/Sat.
+    # Harvesting and reply-fetching want to run daily regardless, and the send
+    # cadence lives in `pipeline.config` -- see the note there. Do not encode
+    # the cadence twice.
     plan = [
         ("signal-forge daily", "daily.yml", 7, 3, [-1]),
-        ("signal-forge ideas", "ideas.yml", 6, 41, [1, 4]),   # Mon, Thu
+        ("signal-forge ideas", "ideas.yml", 6, 41, [1]),   # Mon
     ]
 
     for title, workflow, hour, minute, wdays in plan:

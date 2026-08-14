@@ -13,6 +13,14 @@ def _idea(**over):
         "problem": "things are hard", "why_hard": "the thing is hard",
         "first_weekend": "build the smallest thing",
         "milestones": ["w2: more", "w4: even more"],
+        "in_plain_terms": "imagine your program runs out of memory and dies",
+        "why_it_is_hard_plainly": "you have to measure the moment it dies, "
+                                  "but it cannot tell you once it is dead",
+        "glossary": [
+            {"term": "cgroup", "means": "a box the kernel puts limits on"},
+            {"term": "PSI", "means": "a counter for how long things waited"},
+            {"term": "GC", "means": "the part that reclaims unused memory"},
+        ],
     }
     base.update(over)
     return base
@@ -31,6 +39,30 @@ class TestShapeGate:
     def test_reports_which_fields(self):
         v = check_shape(_idea(title="", problem=""))
         assert "title" in v.reason and "problem" in v.reason
+
+
+class TestPlainLanguageIsRequired:
+    """These ideas are meant to sit above the reader's level. One he cannot
+    follow is one he cannot choose, so the ramp is part of the deliverable
+    rather than a nicety -- an idea without it does not ship."""
+
+    def test_missing_plain_explanation_is_rejected(self):
+        assert not check_shape(_idea(in_plain_terms="")).ok
+
+    def test_missing_plain_difficulty_is_rejected(self):
+        assert not check_shape(_idea(why_it_is_hard_plainly="")).ok
+
+    def test_token_glossary_is_rejected(self):
+        assert not check_shape(_idea(glossary=[
+            {"term": "cgroup", "means": "a box"}])).ok
+
+    def test_glossary_must_be_a_list_of_pairs(self):
+        assert not check_shape(_idea(glossary="cgroup, PSI, GC")).ok
+        assert not check_shape(_idea(glossary=[
+            {"term": "cgroup"}, {"term": "PSI"}, {"term": "GC"}])).ok
+
+    def test_a_full_glossary_passes(self):
+        assert check_shape(_idea()).ok
 
 
 class TestLedgerVectors:

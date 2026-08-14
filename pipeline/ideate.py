@@ -1,9 +1,16 @@
-"""Stage 3 -- generate one idea from a rotated slice of the corpus.
+"""Stage 3 -- generate the week's ideas, one per rotated slice of the corpus.
 
 The rotation is the important part. LLM idea *sets* are narrow even when each
 individual idea looks fresh, and asking a model for variety does not fix it.
 Walking a deterministic cursor over domain slices does, because each run sees a
 structurally different corpus.
+
+That is also why a digest of three ideas is three passes over three slices
+rather than three survivors from one. The three candidates in a single
+generation come from one theme and are asked to differ *in kind*, which makes
+them alternatives to each other -- shipping all three would fill the week with
+one problem seen from three angles, which is precisely the failure mode the
+rotation exists to prevent.
 """
 
 from __future__ import annotations
@@ -18,12 +25,19 @@ from pathlib import Path
 
 from . import gate, ledger, taste
 from .gate import Verdict
-from .config import IDEAS_DIR, PROMPTS_DIR, REJECTS_DIR, ensure_state_dirs
+from .config import (IDEAS_DIR, IDEAS_PER_DIGEST, PROMPTS_DIR, REJECTS_DIR,
+                     ensure_state_dirs)
 from .db import connect, get_kv, set_kv
 from .domains import ROTATION
 from .llm import complete_json
 
 EVIDENCE_PER_IDEA = 14
+
+# How many slices may be *generated from* before a run gives up. Only slices
+# that actually cost a model call count; a starved domain advances for free.
+# Without a ceiling a week where the gates are strict would walk the entire
+# rotation, burning every domain's themes in one sitting.
+MAX_GENERATIONS = IDEAS_PER_DIGEST + 2
 
 
 def peek_domain(conn: sqlite3.Connection) -> str:
@@ -33,9 +47,9 @@ def peek_domain(conn: sqlite3.Connection) -> str:
 
 
 def advance_domain(conn: sqlite3.Connection) -> None:
-    """Consume the slice. Called only after a successful generation -- otherwise
-    a transient model failure silently burns a slot, and with ideas going out
-    twice a week that means a whole delivery with nothing in it."""
+    """Consume the slice. Called only after a generation has been attempted --
+    otherwise a transient model failure silently burns a slot, and with ideas
+    going out once a week that means a whole delivery with nothing in it."""
     cursor = int(get_kv(conn, "rotation_cursor", "0"))
     set_kv(conn, "rotation_cursor", str(cursor + 1))
 
@@ -251,7 +265,17 @@ def _embedder():
     return embed
 
 
-def main() -> int:
+def run_slice(embed_fn) -> tuple[str, str | None]:
+    """One rotation slice, start to finish.
+
+    Returns `(outcome, title)` where outcome is `starved` (no model call made),
+    `rejected` (generated, nothing survived the gates) or `shipped`.
+
+    Each slice gets its own transaction so the idea's JSON file -- which is the
+    dedup ledger's source of truth -- is on disk and embedded before the next
+    slice is gated. Without that, two ideas in one run could not see each other
+    and the week could ship the same project twice.
+    """
     with connect() as conn:
         domain = peek_domain(conn)
         rows, theme_key, provenance = gather_evidence(conn, domain)
@@ -262,12 +286,11 @@ def main() -> int:
             # Consume the slot so the next run tries a different domain.
             print(f"{domain}: only {len(rows)} pieces of evidence, skipping")
             advance_domain(conn)
-            return 0
+            return "starved", None
 
         print(f"{domain}: {provenance}")
         print(f"{domain}: {len(rows)} pieces of evidence")
 
-        embed_fn = _embedder()
         added = ledger.sync(conn, embed_fn)
         if added:
             print(f"ledger: embedded {added} past idea(s)")
@@ -291,8 +314,8 @@ def main() -> int:
                 continue
 
             # A failure on one candidate must not discard the other two -- they
-            # are already paid for, and with Mon/Thu delivery a network blip on
-            # candidate 1 would otherwise cost a whole send.
+            # are already paid for, and with one delivery a week a network blip
+            # on candidate 1 would otherwise cost a third of the digest.
             try:
                 ok, revised, verdicts = gate.run(conn, candidate, embed_fn, domain)
             except Exception as exc:
@@ -310,11 +333,10 @@ def main() -> int:
 
         if survivor is None:
             # Every candidate failed. Do NOT ship the least-bad one -- the gates
-            # exist precisely to make "nothing" an acceptable outcome. Exit 2 so
-            # a run that shipped nothing is distinguishable from one that did.
+            # exist precisely to make "nothing" an acceptable outcome.
             print("\nall candidates rejected; nothing to ship")
             advance_domain(conn)
-            return 2
+            return "rejected", None
 
         slug, path = save(conn, survivor, domain, theme_key, rows)
         advance_domain(conn)
@@ -329,6 +351,50 @@ def main() -> int:
     print(f"  {survivor.get('one_liner')}")
     print(f"\nhard part: {survivor.get('why_hard')}")
     print(f"saved as {slug}")
+    return "shipped", survivor.get("title")
+
+
+def main() -> int:
+    embed_fn = _embedder()
+    shipped: list[str] = []
+    generations = 0
+    # Every slice can be starved on a young corpus. Bounding the walk by the
+    # rotation length keeps that case from spinning instead of returning.
+    slices_left = len(ROTATION)
+
+    while (len(shipped) < IDEAS_PER_DIGEST
+           and generations < MAX_GENERATIONS
+           and slices_left > 0):
+        slices_left -= 1
+        print(f"\n=== idea {len(shipped) + 1} of {IDEAS_PER_DIGEST} ===")
+        # One slice blowing up must not discard the ones already banked. Each
+        # slice commits its own transaction, but an exception escaping here
+        # fails the workflow step -- and the job's "commit state" step then
+        # never runs, so a revoked token on slice 3 would throw away slices 1
+        # and 2 along with it.
+        try:
+            outcome, title = run_slice(embed_fn)
+        except Exception as exc:
+            print(f"slice failed ({type(exc).__name__}: {exc})", file=sys.stderr)
+            outcome, title = "rejected", None
+        if outcome != "starved":
+            generations += 1
+        if title:
+            shipped.append(title)
+
+    print(f"\n{'=' * 60}")
+    if not shipped:
+        # Exit 2 so a run that shipped nothing is distinguishable from one that
+        # did. The workflow treats it as success -- a gate whose job is
+        # sometimes to let nothing through has to be allowed to do that.
+        print("nothing shipped this run")
+        return 2
+
+    print(f"queued {len(shipped)} idea(s) for the next digest:")
+    for title in shipped:
+        print(f"  - {title}")
+    if len(shipped) < IDEAS_PER_DIGEST:
+        print(f"\n(wanted {IDEAS_PER_DIGEST}; the digest sends what is queued)")
     return 0
 
 

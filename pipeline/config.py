@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -42,6 +44,58 @@ GITHUB_TOKEN = env("GITHUB_TOKEN", "")
 MODEL = env("SIGNAL_FORGE_MODEL", "claude-opus-5")
 
 USER_AGENT = "signal-forge/0.1 (+https://github.com/ewang1027/signal-forge)"
+
+
+# --- delivery cadence ------------------------------------------------------
+#
+# Which days a digest goes out, and in whose timezone.
+#
+# The cadence lives here rather than in the cron schedule. The external cron
+# fires `daily` every day -- harvesting and reply-fetching want to run daily
+# regardless of whether there is an email -- and `deliver` decides whether
+# today is a send day. Two things fall out of that:
+#
+#   * a duplicate or hand-fired dispatch cannot produce an off-day email, and
+#   * the cadence is testable without a scheduler.
+#
+# Three digests were sent within 31 minutes on 2026-08-13 because nothing in
+# the code had an opinion about how often it should send. Now it does.
+
+_DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def weekdays(name: str, default: str) -> frozenset[int]:
+    """Parse `"mon wed sat"` into weekday numbers matching `datetime.weekday()`."""
+    out = set()
+    for part in env(name, default).replace(",", " ").split():
+        key = part.strip().lower()[:3]
+        if key not in _DAYS:
+            raise ValueError(f"{name}: {part!r} is not a weekday")
+        out.add(_DAYS[key])
+    return frozenset(out)
+
+
+def _tz(name: str) -> ZoneInfo:
+    """A bad zone name must not take down the run -- a typo would cost a whole
+    digest, unattended, with the traceback buried in an Actions log."""
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        print(f"unknown DIGEST_TZ {name!r}, falling back to UTC", file=sys.stderr)
+        return ZoneInfo("UTC")
+
+
+# Keep this in step with the cron job's timezone, or "Monday" means two
+# different things at either end and the idea run misses its own digest.
+DIGEST_TZ = _tz(env("DIGEST_TZ", "America/New_York"))
+
+# Prep goes out three times a week; ideas ride along on Monday's.
+PREP_DAYS = weekdays("PREP_DAYS", "mon wed sat")
+IDEA_DAYS = weekdays("IDEA_DAYS", "mon")
+
+# Ideas per weekly digest. Each one comes from a different rotation slice, so
+# this is also how many domain slices a single ideation run consumes.
+IDEAS_PER_DIGEST = max(1, int(env("IDEAS_PER_DIGEST", "3")))
 
 
 class StateMissing(RuntimeError):

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS idea (
     theme_id    INTEGER,            -- rowid at generation time; NOT stable, do not join on it
     theme_key   TEXT,               -- stable content hash; this is the one to match on
     sent_utc    INTEGER,
+    reply_id    TEXT,               -- short handle printed in the digest, typed back to grade it
     verdict     TEXT,               -- feedback: more | boring | exists | too_easy | building
     verdict_utc INTEGER
 );
@@ -181,6 +182,7 @@ MIGRATIONS: dict[str, dict[str, str]] = {
     "idea": {
         "theme_id": "INTEGER",
         "theme_key": "TEXT",
+        "reply_id": "TEXT",
         "verdict": "TEXT",
         "verdict_utc": "INTEGER",
     },
