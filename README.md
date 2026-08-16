@@ -240,4 +240,7 @@ points. It's never created automatically: a missing state directory is a fatal
 error, because silently starting a fresh empty corpus and then committing it over
 the real one is data loss with a green checkmark.
 
-The prep track (`pipeline.prep`) is Phase 4 and not built yet.
+**Pull the state repo before running anything locally.** The scheduled runs
+commit to it every day, so a checkout left alone for a week is behind — and
+`signal.db` is a binary, so a local run on a stale copy diverges rather than
+merges.

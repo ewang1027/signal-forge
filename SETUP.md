@@ -239,3 +239,8 @@ State lives in a sibling `signal-forge-state` checkout, or wherever `STATE_DIR`
 points. It is never created automatically — a missing state directory is a fatal
 error, because silently starting a fresh corpus and then committing it over the
 real one is data loss with a green checkmark.
+
+Pull it before running anything locally. The scheduled runs commit to it daily,
+and `signal.db` is a binary: a local run on a stale checkout diverges from the
+remote instead of merging, and untangling that means picking one side of the
+whole database.
