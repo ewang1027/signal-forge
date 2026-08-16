@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -46,6 +46,13 @@ DOMAIN_PROBES = [
 
 HITS_PER_PAGE = 100
 MAX_PAGES = int(env("HARVEST_PAGES", "3"))
+
+# Probes are independent, and this source is ~56 of them run back to back --
+# almost entirely time spent waiting on a response. Algolia allows 10k requests
+# an hour and a full run makes a couple of hundred, so the quota is nowhere near
+# the constraint; the number is kept small anyway because this is a free API and
+# a daily harvest is not urgent.
+CONCURRENCY = max(1, int(env("HARVEST_CONCURRENCY", "4")))
 
 
 def _search(client: httpx.Client, query: str, since: int, *, phrase: bool, page: int) -> dict:
@@ -99,13 +106,20 @@ def _probe(client: httpx.Client, query: str, since: int, *, phrase: bool) -> tup
 
 def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
     plan = [(p, True) for p in PAIN_PROBES] + [(p, False) for p in DOMAIN_PROBES]
-    items, dropped = [], 0
-    for query, phrase in plan:
+
+    def probe(spec: tuple[str, bool]) -> tuple[list[Item], int]:
+        query, phrase = spec
         try:
-            kept, d = _probe(client, query, since, phrase=phrase)
-        except httpx.HTTPError:
-            continue
-        items.extend(kept)
-        dropped += d
-        time.sleep(0.3)
+            return _probe(client, query, since, phrase=phrase)
+        except httpx.HTTPError:  # one bad probe must not lose the other 55
+            return [], 0
+
+    items, dropped = [], 0
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        # `map`, not `as_completed`: results come back in probe order regardless
+        # of which request finished first, so the rows a run inserts -- and the
+        # ids they get -- do not depend on the network's mood.
+        for kept, d in pool.map(probe, plan):
+            items.extend(kept)
+            dropped += d
     return items, dropped

@@ -65,12 +65,16 @@ def gate(item: Item, *, require_pain: bool = True) -> Item | None:
     if is_noise_thread(item.title):
         return None
 
-    domain, hits = best_domain(f"{item.title}\n{item.text}")
-    if hits < MIN_DOMAIN_HITS:
-        return None
-
+    # Pain first: it is one pass over the text where the domain check is one per
+    # lexicon (eight), and ~95% of raw hits are rejected here. Both filters are
+    # required, so which one runs first cannot change the verdict -- only how
+    # much work a rejection costs.
     pain = pain_score(item.text)
     if require_pain and pain < MIN_PAIN:
+        return None
+
+    domain, hits = best_domain(f"{item.title}\n{item.text}")
+    if hits < MIN_DOMAIN_HITS:
         return None
 
     item.domain = domain

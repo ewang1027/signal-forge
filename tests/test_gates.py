@@ -3,7 +3,7 @@
 import numpy as np
 
 from pipeline.gate import check_shape
-from pipeline.ledger import _pack, _unpack, idea_text
+from pipeline.ledger import idea_text, pack_vec, unpack_vec
 from pipeline.priorart import queries_for
 
 
@@ -68,7 +68,12 @@ class TestPlainLanguageIsRequired:
 class TestLedgerVectors:
     def test_pack_roundtrip(self):
         vec = np.random.rand(384).astype(np.float32)
-        assert np.allclose(_unpack(_pack(vec)), vec, atol=1e-6)
+        assert np.allclose(unpack_vec(pack_vec(vec)), vec, atol=1e-6)
+
+    def test_pack_accepts_float64_input(self):
+        # encode() has returned float64 before; the column is float32 either way
+        vec = np.random.rand(384)
+        assert np.allclose(unpack_vec(pack_vec(vec)), vec, atol=1e-6)
 
     def test_idea_text_uses_problem_framing_not_milestones(self):
         # two implementations of the same problem should compare as similar,

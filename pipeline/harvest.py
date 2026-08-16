@@ -11,7 +11,6 @@ than no source at all.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 
@@ -33,7 +32,10 @@ def store(items: list[Item]) -> int:
         return 0
     now = int(time.time())
     with connect() as conn:
-        before = conn.execute("SELECT COUNT(*) AS c FROM signal").fetchone()["c"]
+        # `total_changes` counts rows actually written, so an OR IGNORE that
+        # collided contributes nothing -- which is exactly the number wanted,
+        # without scanning the whole table twice to difference two counts.
+        before = conn.total_changes
         conn.executemany(
             """
             INSERT OR IGNORE INTO signal
@@ -47,8 +49,8 @@ def store(items: list[Item]) -> int:
                 for i in items
             ],
         )
-        after = conn.execute("SELECT COUNT(*) AS c FROM signal").fetchone()["c"]
-    return after - before
+        new = conn.total_changes - before
+    return new
 
 
 def main() -> int:

@@ -57,6 +57,10 @@ that forces a milestone breakdown and a first-weekend deliverable.
 [7 FEEDBACK] replies -> theme weights, FSRS state, taste
 ```
 
+Themes are rebuilt wholesale each run, but the embeddings underneath them are
+cached per signal, so a rebuild costs the week's harvest rather than the whole
+corpus.
+
 Two independent runs, so a failure in one never blocks the other:
 
 | Run | When | Does |
@@ -197,7 +201,7 @@ Everything is on a free tier.
 | Compute | GitHub Actions |
 | Scheduling | external cron → `workflow_dispatch` |
 | LLM | Claude Opus 5 |
-| State | SQLite + `sqlite-vec` |
+| State | SQLite |
 | Embeddings | `sentence-transformers`, local |
 | Email | Resend |
 | Push | ntfy |

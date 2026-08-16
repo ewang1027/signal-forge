@@ -153,6 +153,20 @@ CREATE TABLE IF NOT EXISTS idea_vec (
     vec       BLOB NOT NULL
 );
 
+-- Embeddings of harvested signal, so a theme rebuild only encodes what is new.
+--
+-- A signal's text never changes after harvest, so last week's vector is still
+-- correct -- and re-encoding the whole corpus was the most expensive thing the
+-- pipeline did, growing with the corpus rather than with the week's harvest.
+-- Pure cache: safe to delete, rebuilt on the next run. `text_hash` is what
+-- makes it safe -- a rebuilt corpus reassigns rowids, and matching on the id
+-- alone would hand an old vector to a brand-new signal.
+CREATE TABLE IF NOT EXISTS signal_vec (
+    signal_id INTEGER PRIMARY KEY,
+    text_hash TEXT NOT NULL,
+    vec       BLOB NOT NULL
+);
+
 -- Rotation cursor, last-run timestamps, misc counters.
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,

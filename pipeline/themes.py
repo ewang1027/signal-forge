@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
+import sqlite3
 import time
 from collections import defaultdict
+from functools import lru_cache
 
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
@@ -25,6 +26,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .config import env
 from .db import connect
+from .ledger import pack_vec, unpack_vec
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Cosine distance. Swept against the real corpus: 0.65+ collapses into
@@ -37,13 +39,97 @@ HALF_LIFE_DAYS = 180.0      # a complaint from 2 years ago is weaker evidence th
 LABEL_TERMS = 5
 
 
-def embed(texts: list[str]) -> np.ndarray:
-    """Local embeddings. Imported lazily so the daily run never pays for torch."""
+@lru_cache(maxsize=1)
+def _model(name: str = MODEL_NAME):
+    """The encoder, loaded once per process.
+
+    Constructing a SentenceTransformer re-reads ~90 MB of weights every time.
+    An ideas run embeds repeatedly -- the ledger sync, then one dedup check per
+    candidate, per slice -- and was paying that load on each of them, which cost
+    more than the encoding itself.
+    """
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(MODEL_NAME)
-    return model.encode(texts, normalize_embeddings=True, show_progress_bar=False,
-                        batch_size=32)
+    return SentenceTransformer(name)
+
+
+def embed(texts: list[str]) -> np.ndarray:
+    """Local embeddings. Imported lazily so the daily run never pays for torch."""
+    return _model().encode(texts, normalize_embeddings=True,
+                           show_progress_bar=False, batch_size=32)
+
+
+def signal_text(row) -> str:
+    """Exactly what gets embedded for one signal.
+
+    Shared with the vector cache on purpose: the cached vector is keyed by a
+    hash of this string, so changing what goes into it invalidates the cache
+    instead of quietly reusing vectors of text that is no longer current.
+    """
+    return f"{row['title']}\n{row['text'][:1200]}"
+
+
+def cache_key(text: str) -> str:
+    """Cache identity for one embedded string.
+
+    The model name is part of the hash so that swapping encoders invalidates
+    every entry, rather than quietly mixing vectors from two models into one
+    clustering run -- where the result would not be an error, just meaningless
+    clusters.
+    """
+    return hashlib.sha1(f"{MODEL_NAME}\n{text}".encode()).hexdigest()
+
+
+def embed_signals(conn: sqlite3.Connection, rows: list[dict],
+                  embed_fn=embed) -> np.ndarray:
+    """Vectors for `rows`, in row order, encoding only what is not already cached.
+
+    Clustering is rebuilt wholesale every run, but the *input* to it barely
+    changes: a signal's text is fixed at harvest, so all but the last week's
+    rows were embedded identically last time. Encoding is ~65ms/row, which made
+    the rebuild scale with the size of the corpus instead of with the size of
+    the harvest.
+    """
+    texts = [signal_text(r) for r in rows]
+    hashes = [cache_key(t) for t in texts]
+
+    cached = {(r["signal_id"], r["text_hash"]): r["vec"] for r in
+              conn.execute("SELECT signal_id, text_hash, vec FROM signal_vec")}
+
+    # A vector of the wrong width is a truncated or corrupt blob. Treat it as a
+    # miss rather than letting np.vstack raise halfway through an unattended run.
+    dim: int | None = None
+    vectors: list[np.ndarray | None] = []
+    for row, key in zip(rows, hashes):
+        vec = cached.get((row["id"], key))
+        vec = unpack_vec(vec) if vec is not None else None
+        if vec is not None:
+            dim = dim if dim is not None else len(vec)
+            vec = vec if len(vec) == dim else None
+        vectors.append(vec)
+
+    todo = [i for i, v in enumerate(vectors) if v is None]
+    if todo:
+        fresh = embed_fn([texts[i] for i in todo])
+        if dim is not None and len(fresh[0]) != dim:
+            # Cached vectors are a different width than what the encoder now
+            # returns, despite claiming the same model. Trust the encoder.
+            print("cached vectors have the wrong width; re-encoding the corpus")
+            todo = list(range(len(texts)))
+            fresh = embed_fn(texts)
+        for i, vec in zip(todo, fresh):
+            vectors[i] = np.asarray(vec, dtype=np.float32)
+        conn.executemany(
+            "INSERT OR REPLACE INTO signal_vec (signal_id, text_hash, vec) "
+            "VALUES (?, ?, ?)",
+            [(rows[i]["id"], hashes[i], pack_vec(vectors[i])) for i in todo],
+        )
+
+    # Rows dropped from the corpus would otherwise keep their vectors forever.
+    conn.execute("DELETE FROM signal_vec WHERE signal_id NOT IN (SELECT id FROM signal)")
+
+    print(f"embedded {len(todo)} new, reused {len(texts) - len(todo)} cached")
+    return np.vstack(vectors)
 
 
 def cluster(vectors: np.ndarray) -> np.ndarray:
@@ -154,9 +240,9 @@ def build() -> list[dict]:
             print("corpus too small to cluster")
             return []
 
-        texts = [f"{r['title']}\n{r['text'][:1200]}" for r in rows]
-        print(f"embedding {len(texts)} items...")
-        vectors = embed(texts)
+        print(f"clustering {len(rows)} items...")
+        texts = [signal_text(r) for r in rows]
+        vectors = embed_signals(conn, rows)
 
         labels = cluster(vectors)
         names = label_clusters(texts, labels)

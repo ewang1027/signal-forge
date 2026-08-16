@@ -9,7 +9,7 @@ built around -- no inference required.
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -37,6 +37,12 @@ REPOS = [
 MIN_REACTIONS = 15
 PER_PAGE = 40
 
+# The search endpoint allows 30 requests/minute authenticated. Spacing is
+# measured from the start of the previous request rather than slept for after it
+# finishes, so a slow response counts toward the interval instead of being added
+# to it -- the same ceiling, about a minute less wall clock across the repo list.
+MIN_INTERVAL = 2.2
+
 
 def _headers() -> dict[str, str]:
     h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
@@ -46,18 +52,39 @@ def _headers() -> dict[str, str]:
 
 
 def _iso(ts: int) -> str:
-    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+
+
+def _ts(raw: str) -> int | None:
+    """GitHub's `created_at` as a real UTC epoch, or None if unparseable.
+
+    `strptime("%Y-%m-%dT%H:%M:%SZ")` returned a *naive* datetime, whose
+    `.timestamp()` is interpreted as local time -- so every issue's age was off
+    by the machine's UTC offset, and that age feeds the recency decay in
+    `evidence_score`.
+    """
+    try:
+        when = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+    if when.tzinfo is None:  # GitHub always sends 'Z'; assume UTC if it stops
+        when = when.replace(tzinfo=timezone.utc)
+    return int(when.timestamp())
 
 
 def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
     items: list[Item] = []
     dropped = 0
 
+    started = 0.0
     for repo in REPOS:
         query = (
             f"repo:{repo} is:issue is:open "
             f"reactions:>={MIN_REACTIONS} created:>={_iso(since)}"
         )
+        if (wait := MIN_INTERVAL - (time.monotonic() - started)) > 0:
+            time.sleep(wait)
+        started = time.monotonic()
         try:
             resp = client.get(
                 SEARCH,
@@ -76,12 +103,8 @@ def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
 
         for issue in resp.json().get("items", []):
             body = issue.get("body") or ""
-            created = issue.get("created_at", "")
-            try:
-                created_utc = int(
-                    datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").timestamp()
-                )
-            except ValueError:
+            created_utc = _ts(issue.get("created_at", ""))
+            if created_utc is None:
                 created_utc = since
 
             item = gate(Item(
@@ -99,8 +122,5 @@ def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
                 items.append(item)
             else:
                 dropped += 1
-
-        # search endpoint allows 30/min authenticated
-        time.sleep(2.2)
 
     return items, dropped

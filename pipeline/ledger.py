@@ -18,9 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
-import struct
 
 import numpy as np
 
@@ -49,12 +47,22 @@ def idea_text(idea: dict) -> str:
     ]).strip()
 
 
-def _pack(vec: np.ndarray) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec.astype(np.float32))
+# Float32 blobs, native byte order. `themes` stores signal vectors the same way,
+# so these live here rather than there: the light half of the pipeline imports
+# this module, and anything defined next to the encoder would drag sklearn and
+# torch into the daily run.
+def pack_vec(vec: np.ndarray) -> bytes:
+    """Serialise for the BLOB column.
+
+    `np.tobytes` rather than `struct.pack(f"{n}f", *vec)`: the struct form
+    unpacked 384 floats into a Python argument tuple per vector, which is most
+    of the cost of writing a cache whose entire purpose is to be cheap.
+    """
+    return np.ascontiguousarray(vec, dtype=np.float32).tobytes()
 
 
-def _unpack(blob: bytes) -> np.ndarray:
-    return np.array(struct.unpack(f"{len(blob) // 4}f", blob), dtype=np.float32)
+def unpack_vec(blob: bytes) -> np.ndarray:
+    return np.frombuffer(blob, dtype=np.float32)
 
 
 def load_from_disk() -> list[dict]:
@@ -98,7 +106,7 @@ def sync(conn: sqlite3.Connection, embed_fn) -> int:
     vectors = embed_fn(texts)
     conn.executemany(
         "INSERT OR IGNORE INTO idea_vec (text_hash, title, vec) VALUES (?, ?, ?)",
-        [(k, t, _pack(v)) for (k, t), v in zip(pending, vectors)],
+        [(k, t, pack_vec(v)) for (k, t), v in zip(pending, vectors)],
     )
     return len(texts)
 
@@ -113,8 +121,8 @@ def nearest(conn: sqlite3.Connection, vec: np.ndarray) -> tuple[float, str]:
     # Changing the embedding model would otherwise poison the ledger and take
     # down the whole run from inside the dedup gate.
     dim = len(vec)
-    usable = [(r["title"], _unpack(r["vec"])) for r in rows]
-    usable = [(t, v) for t, v in usable if len(v) == dim]
+    usable = [(r["title"], v) for r in rows
+              if len(v := unpack_vec(r["vec"])) == dim]
     if not usable:
         return 0.0, ""
 

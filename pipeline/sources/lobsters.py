@@ -55,6 +55,14 @@ def harvest(client: httpx.Client, since: int) -> tuple[list[Item], int]:
                     continue
                 seen.add(short_id)
 
+                # Nothing to harvest from a story nobody commented on, and the
+                # detail fetch is the expensive part of this source -- one
+                # request plus a courtesy pause per story, several hundred of
+                # them per run, and about a third have no comments at all.
+                # `.get` defaults to None so a missing field still fetches.
+                if story.get("comment_count") == 0:
+                    continue
+
                 # The story itself is an announcement; its comments are where
                 # people report what actually went wrong.
                 try:

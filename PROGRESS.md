@@ -694,3 +694,94 @@ The harvest, themes, ranking, prior-art and prep-scheduling paths are untouched.
 moved into `pipeline/config.py`. If a digest fails to arrive on a Mon/Wed/Sat, the
 first thing to check is that day's `daily` run log for `is not a send day` — that
 line means the cadence config and the calendar disagree, not that the run broke.
+
+## Performance pass (2026-08-17)
+
+No behaviour changed. Every measurement below is against the real 191-row corpus
+or the live APIs, not a benchmark.
+
+### The theme rebuild re-encoded the entire corpus every run
+
+The expensive one, and the only change here that gets *worse* over time if left
+alone. Clustering is rebuilt wholesale each run — which is correct, it avoids
+incremental-clustering drift — but the embeddings feeding it were rebuilt with
+it. A signal's text is fixed at harvest, so all but the last week's vectors were
+being recomputed identically, and the cost scaled with the corpus rather than
+with the harvest: ~65ms/row locally, so a 2,000-row corpus would spend two
+minutes of the `ideas` run re-deriving numbers it already had.
+
+Vectors now live in `signal_vec` and only new rows are encoded. Measured, same
+25 themes with identical scores and labels: **8.1s → 0.8s**.
+
+Two things make the cache safe to trust, both tested:
+
+- **It is keyed by a hash of the exact text embedded, not by rowid.** A corpus
+  rebuild resets SQLite's rowid counter — the same trap that makes theme ids
+  unusable across rebuilds — so matching on the id alone would hand row 1's
+  vector to a brand-new row 1.
+- **The model name is inside that hash.** Swapping encoders would not raise; it
+  would silently mix two models' vectors into one clustering run and produce
+  clusters that mean nothing. Changing `MODEL_NAME` now invalidates the cache.
+
+It is a pure cache — deleting `signal_vec` costs one slow rebuild and nothing
+else. Vectors for signals that leave the corpus are pruned on the next build.
+
+### The encoder was reloaded on every call
+
+`SentenceTransformer(...)` re-reads ~90 MB of weights each time it is
+constructed, and an ideas run constructs it repeatedly — the ledger sync, then
+one dedup check per candidate, per slice. Now loaded once per process. Measured
+on the dedup gate: first call 5.1s, subsequent calls **0.01s**, ~12 loads
+avoided per ideas run.
+
+### Harvest was serial where it had no reason to be
+
+- **HN probes now run four at a time.** 56 independent probes were running back
+  to back, almost entirely waiting on responses. Algolia allows 10k requests an
+  hour and a full run makes a couple of hundred, so the quota was never the
+  constraint. Results are collected with `map`, not `as_completed`, so rows are
+  still inserted in probe order and their ids do not depend on which request
+  finished first. Live, same 14 items kept: **22s → 5s**.
+- **Lobste.rs no longer fetches stories with no comments.** The detail fetch is
+  this source's entire cost — one request plus a courtesy pause per story,
+  several hundred per run — and roughly a third of the listing has zero comments
+  and therefore nothing to harvest. Only an explicit `comment_count == 0` skips;
+  a missing field still fetches, so the API dropping that field cannot silently
+  empty the source.
+- **GitHub paces from the start of the previous request** instead of sleeping a
+  flat 2.2s after it returns. Same 30/min ceiling, but response time counts
+  toward the interval rather than being added to it — roughly a minute across 36
+  repos.
+
+The lobsters per-story pause is deliberately left alone. It is a small
+volunteer-run site, and being rate-limited there would cost more than the
+minutes it saves.
+
+### Smaller things
+
+- **The shared gate checks pain before domain.** Pain is one pass over the text;
+  domain is one per lexicon, so eight. Both are required, so the order cannot
+  change a verdict — only what a rejection costs, and ~95% of raw hits are
+  rejections.
+- **`store()` counts with `total_changes`** instead of differencing two
+  `COUNT(*)` scans of the whole table.
+- **Vectors pack with `np.tobytes`/`np.frombuffer`** rather than `struct`, which
+  was unpacking 384 floats into a Python argument tuple per vector. Existing
+  blobs read back unchanged — both forms are native-order float32.
+- **`created_at` from GitHub is parsed as UTC.** `strptime("...Z")` returns a
+  *naive* datetime whose `.timestamp()` is read as local time, so every issue's
+  age was off by the machine's UTC offset — and age feeds the recency decay in
+  `evidence_score`. No effect in CI, where the runner is already UTC; wrong by
+  hours on a laptop.
+- **`sqlite-vec` is gone from the dependencies.** It was never imported. Dedup
+  is a numpy dot product over a few dozen vectors, which is the right tool at
+  this scale; the dependency was only installed weight and a README claim that
+  was not true.
+
+### What this did not touch
+
+Nothing about ranking, gating, cadence or scheduling. The one change that alters
+a stored value is the GitHub timestamp fix, and it moves it toward what the
+column name has always claimed. 25 new tests cover the cache's invalidation
+rules, probe ordering under concurrency, the skipped detail fetches, and the
+gate's equivalence under the reordered checks.

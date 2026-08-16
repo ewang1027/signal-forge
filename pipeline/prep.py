@@ -21,7 +21,6 @@ whole intensity dial.
 from __future__ import annotations
 
 import json
-import os
 import random
 import sqlite3
 import sys
