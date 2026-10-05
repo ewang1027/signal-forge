@@ -168,10 +168,10 @@ Create a fine-grained PAT with **Actions: read and write** on this repo only, th
 at [cron-job.org](https://cron-job.org) (free, and it shows failure history) add
 two jobs:
 
-Or just run `uv run python scripts/setup-cron.py` with `CRON_KEY`, `GH_PAT` and
-`TZ_NAME` set — it creates both jobs, and re-running updates rather than
-duplicating them. Note that `TZ_NAME` must match `DIGEST_TZ` (below), or "Monday"
-means two different things at either end.
+Or just run `uv run python scripts/setup-cron.py` with `CRON_KEY` and `GH_PAT`
+set. It creates both jobs, and re-running updates rather than duplicating them.
+`TZ_NAME` defaults to `America/New_York`, the same as `DIGEST_TZ`. If you change
+one, change the other, or "Monday" means two different things at either end.
 
 **Daily digest** — every day at your preferred time:
 ```

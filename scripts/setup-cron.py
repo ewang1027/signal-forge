@@ -7,7 +7,7 @@ produced malformed bodies twice. Python builds the JSON, so there is no quoting
 to get wrong.
 
 Usage:
-    CRON_KEY=... GH_PAT=... TZ_NAME=Europe/Brussels python3 scripts/setup-cron.py
+    CRON_KEY=... GH_PAT=... uv run python scripts/setup-cron.py
 
 Re-running is safe: jobs are matched by title and updated rather than duplicated.
 """
@@ -30,7 +30,9 @@ REPO = os.environ.get("REPO", "ewang1027/signal-forge")
 
 CRON_KEY = os.environ.get("CRON_KEY", "")
 GH_PAT = os.environ.get("GH_PAT", "")
-TZ_NAME = os.environ.get("TZ_NAME", "Europe/Brussels")
+# Must match DIGEST_TZ in pipeline/config.py, or the cron and the pipeline
+# disagree about which day it is.
+TZ_NAME = os.environ.get("TZ_NAME", "America/New_York")
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
