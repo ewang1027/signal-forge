@@ -32,3 +32,8 @@ models/
 # macos
 .DS_Store
 build/
+
+# local-only: git hooks, their installer, and working notes
+.githooks/
+scripts/install-hooks.sh
+PROGRESS.md

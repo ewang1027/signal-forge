@@ -21,7 +21,7 @@ Copy the token it prints. It starts `sk-ant-oat01-…`.
 > **Never set `ANTHROPIC_API_KEY` anywhere in this project.** If both are present the
 > API key wins and every run bills your API account instead of the subscription.
 > People have run up four figures this way. The workflows deliberately don't
-> reference it, and the pre-commit hook blocks it by name.
+> reference it.
 
 **Without this:** no ideas. Prep still works.
 
@@ -218,7 +218,6 @@ environment somewhere and you're paying per token.
 ```sh
 uv sync --extra embed
 cp .env.example .env          # same values as the secrets above
-./scripts/install-hooks.sh    # installs guards into BOTH repos
 
 uv run python -m pipeline.harvest
 uv run --extra embed python -m pipeline.themes

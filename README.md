@@ -175,7 +175,6 @@ See **[SETUP.md](SETUP.md)** — every credential, where to get it, what it cost
 ```sh
 uv sync --extra embed       # plain `uv sync` REMOVES the embedding deps
 cp .env.example .env        # fill in
-./scripts/install-hooks.sh  # installs guards into this repo AND the state repo
 
 uv run python -m pipeline.harvest               # pull signal from all sources
 uv run --extra embed python -m pipeline.themes  # cluster into pain themes
