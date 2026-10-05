@@ -10,6 +10,8 @@ The slice itself (evidence, generation, gates) is covered by test_gates.
 
 import pytest
 
+pytest.importorskip("numpy", reason="needs the embed extra: uv sync --extra embed")
+
 
 @pytest.fixture
 def loop(monkeypatch):

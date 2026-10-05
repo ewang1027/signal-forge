@@ -10,8 +10,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only needed for the theme-clustering stage. Kept separate so the daily run
-# (harvest + prep + deliver) stays fast and does not pull torch.
+# Only needed by the ideas run (theme clustering and the dedup gate). Kept
+# separate so the daily run (harvest + prep + deliver) stays fast and does not
+# pull torch. Tests that need it skip without it.
 embed = [
     "sentence-transformers>=3.0",
     "scikit-learn>=1.5",

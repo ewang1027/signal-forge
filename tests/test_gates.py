@@ -1,6 +1,8 @@
 """Gate behaviour. Cases here are drawn from things that actually went wrong."""
 
-import numpy as np
+import pytest
+
+np = pytest.importorskip("numpy", reason="needs the embed extra: uv sync --extra embed")
 
 from pipeline.gate import check_shape
 from pipeline.ledger import idea_text, pack_vec, unpack_vec

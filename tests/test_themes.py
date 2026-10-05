@@ -7,7 +7,10 @@ a row whose text changed must not keep its old vector, and a rowid reused by a
 rebuilt corpus must not inherit the previous occupant's.
 """
 
-import numpy as np
+import pytest
+
+np = pytest.importorskip("numpy", reason="needs the embed extra: uv sync --extra embed")
+pytest.importorskip("sklearn", reason="needs the embed extra: uv sync --extra embed")
 
 from pipeline.themes import embed_signals, signal_text
 

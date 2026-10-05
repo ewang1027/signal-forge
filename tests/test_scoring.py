@@ -6,6 +6,10 @@ decomposing real scores rather than by reading the function.
 
 import time
 
+import pytest
+
+pytest.importorskip("sklearn", reason="needs the embed extra: uv sync --extra embed")
+
 from pipeline.ideate import UngroundedIdea, validate_refs
 from pipeline.sources.lobsters import _parse_ts
 from pipeline.themes import evidence_score, theme_key
