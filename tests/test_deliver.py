@@ -207,6 +207,19 @@ class TestReplyHandles:
         from pipeline.deliver import reply_id_for
         assert reply_id_for("go-routine-leak-finder", set()) == "go-routine"
 
+    @pytest.mark.parametrize("slug, handle", [
+        # Real slugs. Their digests went out with the handles `where`, `a-cve`,
+        # `an-edit` and `a-function`.
+        ("where-does-proot-lie-a-divergence-oracle-for-syscall-emulati", "proot-lie"),
+        ("a-cve-regression-farm-keep-proving-old-bugs-are-still-dead", "cve-regression"),
+        ("an-edit-sequence-fuzzer-for-a-query-based-compiler-core-with", "edit-sequence"),
+        ("a-function-granular-incremental-compiler-whose-linker-patche",
+         "function-granular"),
+    ])
+    def test_a_title_without_a_name_skips_the_leading_filler(self, slug, handle):
+        from pipeline.deliver import reply_id_for
+        assert reply_id_for(slug, set()) == handle
+
     def test_handles_are_recorded_at_send(self, db, monkeypatch):
         import pipeline.deliver as deliver
         _Sent().install(monkeypatch, deliver)

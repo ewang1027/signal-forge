@@ -275,10 +275,20 @@ def next_unsent(conn: sqlite3.Connection, limit: int = 1) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+# Words that can lead a title but never name a project.
+_FILLER = frozenset("""
+    a an the this that these those
+    where what why how when who which
+    is are was does do did can could should would will
+    for of to in on at by with from and or not
+    your my our its
+""".split())
+
+
 def reply_id_for(slug: str, taken: set[str]) -> str:
     """A short handle for one idea, unique among `taken`.
 
-    The project name -- the slug's first token -- is what a human would type,
+    The project name -- usually the slug's first token -- is what a human types,
     and the whole slug is 60 characters of hyphens that nobody types on a phone.
     `taken` must include live card ids as well as other ideas' handles: the
     reply parser looks for both in the same line, and a handle that collides
@@ -287,9 +297,17 @@ def reply_id_for(slug: str, taken: set[str]) -> str:
     parts = [p for p in (slug or "").split("-") if p]
     if not parts:
         return ""
-    # A two-letter first token ("go", "k8"-ish) is too weak to match on without
-    # colliding with ordinary prose, so borrow the next word.
-    base = parts[0] if len(parts[0]) >= 3 else "-".join(parts[:2])
+    if parts[0] in _FILLER:
+        # A descriptive title ("A CVE regression farm", "Where does proot
+        # lie?") has no project name up front. Its first word is an article or
+        # a question word that shows up in any sentence, so use the first two
+        # content words instead.
+        words = [p for p in parts if p not in _FILLER]
+        base = "-".join(words[:2]) or slug
+    else:
+        # A two-letter first token ("go", "k8"-ish) is too weak to match on
+        # without colliding with ordinary prose, so borrow the next word.
+        base = parts[0] if len(parts[0]) >= 3 else "-".join(parts[:2])
     if base not in taken:
         return base
     for n in range(2, 100):
