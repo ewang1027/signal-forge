@@ -3,7 +3,7 @@
 
 Ideas generated before 2026-08-14 have no `in_plain_terms`, `glossary` or
 `starting_points`, so they render without the ramp that makes a deliberately
-over-my-level idea choosable. They are already past the gates and otherwise
+ambitious idea choosable. They are already past the gates and otherwise
 fine, so they get the missing fields rather than being dropped.
 
 Only **unsent** ideas are touched. A sent one is history; rewriting it would
@@ -12,9 +12,9 @@ change what a reply is replying to.
 Usage:
     uv run python scripts/backfill-plainly.py [--dry-run]
 
-Local runs authenticate from the Claude Code keychain. If `.env` carries a
-stale `CLAUDE_CODE_OAUTH_TOKEN` it will shadow that and fail with a 401 --
-blank it rather than deleting it, so the CI value stays documented.
+Local runs authenticate from the Claude Code keychain. A stale
+`CLAUDE_CODE_OAUTH_TOKEN` in `.env` shadows the keychain and fails with a 401,
+so leave that variable empty for local runs.
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ from .config import IDEAS_DIR, env
 # Similarity above which two ideas are the same idea. Cosine over MiniLM
 # embeddings of title+one_liner+problem.
 #
-# Measured against real generations rather than guessed. The plan's initial 0.85
+# Measured against real generations rather than guessed. An initial 0.85
 # let a genuine duplicate through: "torn -- a crash-point explorer for SQLite"
 # and "Crash-state enumerator for SQLite" scored 0.830 and are the same project.
 # Across all pairs, genuinely distinct ideas topped out at 0.605 (two different

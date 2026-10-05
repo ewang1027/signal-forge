@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS theme_member (
 
 -- FSRS review state, one row per card. The card *content* lives in cards/*.json
 -- in the public repo (it is authored curriculum, not personal); this table is
--- the record of what Ethan keeps getting wrong, which is not.
+-- the record of which cards keep getting missed, which is personal.
 CREATE TABLE IF NOT EXISTS review (
     deck     TEXT NOT NULL,
     card_id  TEXT NOT NULL,

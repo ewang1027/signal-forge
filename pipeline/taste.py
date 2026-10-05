@@ -1,6 +1,6 @@
 """TASTE.md -- what has landed well and what hasn't.
 
-Written by the feedback loop (Phase 5), read by ideation. Kept as prose rather
+Written by the feedback loop, read by ideation. Kept as prose rather
 than structured preferences because it goes straight into a prompt, and because
 the useful signal ("too infrastructure-flavoured, prefers algorithmic cores")
 does not decompose into fields.
@@ -35,7 +35,7 @@ def _flatten(text: str, limit: int = 200) -> str:
 
 
 def record(verdict: str, title: str, note: str = "") -> None:
-    """Append an observation. Phase 5 calls this from inbound replies."""
+    """Append an observation. The feedback loop calls this for inbound replies."""
     TASTE_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not TASTE_PATH.is_file():
         TASTE_PATH.write_text(DEFAULT)

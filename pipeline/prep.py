@@ -5,7 +5,7 @@ would only train recall of those problems) and system design.
 
 ## Why there is no target date
 
-The plan originally ramped volume backward from an interview date. While actively
+An earlier version ramped volume backward from an interview date. While actively
 recruiting there is no such date -- a callback arrives with about a week's notice,
 so the deadline is effectively "any given week". That makes a countdown the wrong
 model and a **rolling readiness cap** the right one.
@@ -179,8 +179,8 @@ def grade(conn: sqlite3.Connection, deck: str, card_id: str, rating: Rating) -> 
     try:
         card = Card.from_dict(json.loads(row["state"]))
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        # A corrupt blob must not lose the grade -- Phase 5 calls this from an
-        # inbound webhook, where an unhandled exception drops the review.
+        # A corrupt blob must not lose the grade -- the feedback loop calls this
+        # for each reply, where an unhandled exception drops the review.
         card = Card()
 
     before = card.state
