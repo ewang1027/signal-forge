@@ -164,14 +164,19 @@ averages several hours and runs get dropped silently under load — a 7am digest
 arriving at noon is useless. `workflow_dispatch` fires immediately, so an external
 cron calls it.
 
-Create a fine-grained PAT with **Actions: read and write** on this repo only, then
-at [cron-job.org](https://cron-job.org) (free, and it shows failure history) add
-two jobs:
+Create a fine-grained PAT with **Actions: read and write** on this repo only.
+Fine-grained PATs expire (30 days by default), and when this one does the cron's
+calls get rejected before any run starts, so nothing shows up in the Actions tab.
+Give it a long expiry and set a reminder to rotate it.
 
-Or just run `uv run python scripts/setup-cron.py` with `CRON_KEY` and `GH_PAT`
-set. It creates both jobs, and re-running updates rather than duplicating them.
+The easy way is `uv run python scripts/setup-cron.py` with `CRON_KEY` (your
+cron-job.org API key) and `GH_PAT` set. It creates both jobs, and re-running
+updates rather than duplicating them, which is also how you rotate the PAT.
 `TZ_NAME` defaults to `America/New_York`, the same as `DIGEST_TZ`. If you change
 one, change the other, or "Monday" means two different things at either end.
+
+To set it up by hand instead, add two jobs at [cron-job.org](https://cron-job.org)
+(free, and it shows failure history):
 
 **Daily digest** — every day at your preferred time:
 ```
